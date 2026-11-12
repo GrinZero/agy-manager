@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f9f7"><meta name="description" content="家里的 AI 额度，一起用，心里有数。">
+  <title>AGY 家庭配额</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
+</head>
+<body data-auth="loading">
+  <a class="skip-link" href="#main">跳到内容</a>
+  <header class="site-header"><div class="header-inner">
+    <a class="brand" href="#overview" aria-label="AGY 家庭配额首页"><span class="wordmark">agy</span><span>家庭配额</span></a>
+    <nav class="main-nav" aria-label="主要导航"><a href="#overview" aria-current="page">额度</a><a href="#members" id="members-nav">成员</a><a href="#activity">记录</a><a href="#tutorial">教程</a><a href="#settings" class="mobile-settings" data-admin-only>设置</a></nav>
+    <div class="header-actions"><a href="#settings" id="settings-top" data-admin-only>设置</a><details class="account-menu"><summary aria-label="账号菜单"><span id="account-initial" class="avatar small-avatar">家</span></summary><div class="account-popover"><span id="account-label">家庭账号</span><button id="logout" class="text-button">退出登录</button></div></details></div>
+  </div></header>
+  <main id="main" tabindex="-1">
+    <section id="overview" class="page" aria-labelledby="overview-title">
+      <div class="page-heading"><div><h1 id="overview-title" tabindex="-1">家里的 AI 额度</h1><p>两组额度，按百分比共享。</p></div><div class="refresh-group"><span id="updated">正在连接</span><button id="refresh" class="text-button refresh-button"><span class="refresh-symbol" aria-hidden="true">↻</span> 刷新</button></div></div>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section class="quota-surface" aria-label="家庭共享额度"><div class="pool-grid" id="pools" aria-busy="true"><div class="loading-placeholder">正在查看家里的额度…</div></div><details class="quota-details" id="quota-details"><summary>额度怎么算？</summary><p>以母账号官方剩余百分比为唯一账本。调用前结合会话上下文与高分位上界预留百分比，完成后按真实输入、缓存与输出 Token 线性结算，并用周期累积不等式持续收紧转换率区间。</p><div id="quota-breakdown" class="breakdown-grid"></div><p class="hint">个人份额、家庭上限与母账号真实余额同时把关；母账号短暂查询抖动享有 15 分钟容错宽限期。</p></details></section>
+      <section class="home-members" aria-labelledby="home-members-title"><div class="section-heading"><h2 id="home-members-title">一起使用的人 <span id="member-count" class="count"></span></h2><button id="add-member" data-admin-only class="outline">＋ 添加成员</button></div><div class="list-caption">本期 5 小时 · 已用 / 个人百分比上限</div><div id="home-members"></div><a class="subtle-link all-members" href="#members" hidden>查看全部成员 →</a></section>
+      <footer class="home-footer"><div><span id="connection-status">母账号尚未连接</span><span id="guard-status"></span><a href="#settings/account" data-admin-only>查看详情</a></div><span>5 小时与每周配额均需有余额。</span></footer>
+    </section>
+    <section id="members" class="page" aria-labelledby="members-title" hidden>
+      <div class="page-heading"><div><h1 id="members-title" tabindex="-1">一起使用的人</h1><p>手动填写称呼和 Google 邮箱，按百分比为每个人分配额度。</p></div><button class="outline" data-add-member data-admin-only>＋ 添加成员</button></div>
+      <div class="member-window-control" aria-label="查看成员用量窗口"><button class="selected" data-member-window="fiveHour" aria-pressed="true">5 小时</button><button data-member-window="week" aria-pressed="false">每周</button><span>已用 / 个人百分比上限，含进行中预留</span></div>
+      <div id="member-list" class="member-list"></div><div class="page-footnote"><span>个人百分比上限不提前预扣家庭池额度。</span><button id="upgrade-client" class="text-button">更新本地守门员 ↗</button></div>
+    </section>
+    <section id="activity" class="page" aria-labelledby="activity-title" hidden>
+      <div class="page-heading"><div><h1 id="activity-title" tabindex="-1">最近的使用</h1><p>每一次调用，都有迹可循。</p></div><span class="quiet-label">最近 80 条</span></div>
+      <div class="activity-controls"><label class="search-label"><span class="sr-only">搜索成员或模型</span><input id="event-search" type="search" placeholder="搜索成员或模型"></label><label><span class="sr-only">调用状态</span><select id="event-status"><option value="">全部状态</option><option value="committed">已记账</option><option value="reserved">进行中</option><option value="released">已释放</option><option value="expired">预留已过期</option></select></label></div>
+      <div id="events" class="event-list" aria-live="polite"></div><p id="event-count" class="hint"></p>
+    </section>
+    <section data-admin-only id="settings" class="page settings-page" aria-labelledby="settings-title" hidden>
+      <div class="page-heading"><div><h1 id="settings-title" tabindex="-1">按家里的习惯来</h1><p>调整百分比分配，照顾每个人的使用。</p></div></div>
+      <div class="settings-tabs" role="tablist" aria-label="设置分类"><button id="tab-budget" role="tab" aria-selected="true" aria-controls="settings-budget" data-settings-tab="budget">额度分配</button><button id="tab-account" role="tab" aria-selected="false" aria-controls="settings-account" data-settings-tab="account" tabindex="-1">账号与额度</button><button id="tab-advanced" role="tab" aria-selected="false" aria-controls="settings-advanced" data-settings-tab="advanced" tabindex="-1">更多选项</button></div>
+      <form id="policy-form">
+        <div id="settings-budget" role="tabpanel" aria-labelledby="tab-budget">
+          <section class="setting-section"><div class="setting-description"><h2>家庭配额上限</h2><p>两个模型池分别按百分比（0–100%）记账，各自跟随官方重置时间清零。个人份额、家庭上限与母账号真实余额同时生效。</p></div><div class="limit-matrix"><span></span><span>5 小时（%）</span><span>每周（%）</span><strong>Gemini</strong><label class="sr-only" for="budget-g5">Gemini 家庭 5 小时百分比上限</label><input id="budget-g5" name="gemini_5h_limit" type="number" min="0" max="100" step="0.01" required><label class="sr-only" for="budget-gw">Gemini 家庭每周百分比上限</label><input id="budget-gw" name="gemini_wk_limit" type="number" min="0" max="100" step="0.01" required><strong>Claude / GPT</strong><label class="sr-only" for="budget-t5">第三方家庭 5 小时百分比上限</label><input id="budget-t5" name="tp_5h_limit" type="number" min="0" max="100" step="0.01" required><label class="sr-only" for="budget-tw">第三方家庭每周百分比上限</label><input id="budget-tw" name="tp_wk_limit" type="number" min="0" max="100" step="0.01" required></div><label class="inline-number">安全缓冲留白 <span><input name="buffer_percent" type="number" min="0" max="99" required aria-describedby="buffer-hint"> %</span></label><p class="hint" id="buffer-hint">默认 0%；留出安全底线后，家庭可分配比例与母账号真实余额保底同步扣减。</p></section>
+          <section class="setting-section"><div class="setting-description"><h2>模型相对权重</h2><p>按模型家族与思考档位（Low ×0.6 / High ×1.5）折算标准消耗当量；调用前结合已知上下文做高分位预留，完成后按实际 Token 线性结算。</p></div><div class="form-grid"><label>Gemini Flash <span class="input-unit"><input name="flash_weight" type="number" min="0.1" max="10000" step="0.01" required><span>倍 / 当量</span></span></label><label>其他 Gemini <span class="input-unit"><input name="gemini_weight" type="number" min="0.1" max="10000" step="0.01" required><span>倍 / 当量</span></span></label><label>Claude / GPT <span class="input-unit"><input name="tp_weight" type="number" min="0.1" max="10000" step="0.01" required><span>倍 / 当量</span></span></label><label>Claude Opus <span class="input-unit"><input name="opus_weight" type="number" min="0.1" max="10000" step="0.01" required><span>倍 / 当量</span></span></label></div></section>
+          <section class="setting-section"><label class="switch-row"><span><strong>自动区间校准转换率</strong><small id="calibration-hint">按周期累积跌幅与已完成当量持续收紧安全上界，跨周期重置保留记忆。</small></span><input type="checkbox" name="calibration_enabled" role="switch" aria-describedby="calibration-hint"></label><details class="plain-details"><summary>按当前设置可以用多少？</summary><div class="policy-example" id="policy-examples" aria-live="polite"></div><p class="hint">按当前安全上界与常规上下文单轮消耗估算。长上下文或个人上限可能更快达到配额。</p></details></section>
+        </div>
+        <div id="settings-account" role="tabpanel" aria-labelledby="tab-account" hidden>
+          <section class="setting-section"><div class="section-heading"><h2>母账号</h2><button type="button" class="outline" id="connect-mother">登录母账号</button></div><div id="mother-account"></div></section>
+          <section class="setting-section"><h2>母账号实时联动与容错</h2><p>母账号每分钟同步一次官方百分比，并支持多端点自动容灾。母账号未连接、授权失效、快照超过 15 分钟未更新，或官方真实余额触及安全缓冲底线时，将自动暂停新调用。</p></section>
+        </div>
+        <div id="settings-advanced" role="tabpanel" aria-labelledby="tab-advanced" hidden>
+          <section class="setting-section"><h2>进行中调用的预留</h2><p>调用开始时先冻结预估百分比，完成后按实际 Token 多退少补。未完成的预留到期自动释放。</p><label class="inline-number">预留有效期 <span><input type="number" name="reservation_seconds" min="30" max="3600" required> 秒</span></label><p class="hint">可设置 30–3600 秒，长时间调用可以适当调高。</p></section>
+          <section class="setting-section"><h2>使用须知</h2><p>本地守门员适用于互信成员。修改或移除本地 Hook 可以绕过限制。</p><p>所有成员与家庭账本均统一以百分比（%）计量并与母账号对账。</p></section>
+        </div>
+        <div class="settings-save"><p class="form-error" role="alert"></p><span id="save-status" class="hint">设置已同步</span><button id="reset-policy" type="button" class="quiet">还原修改</button><button class="primary" type="submit">保存配额设置</button></div>
+      </form>
+    </section>
+    <section id="tutorial" class="page tutorial-page" aria-labelledby="tutorial-title" hidden>
+      <div class="page-heading"><div><h1 id="tutorial-title" tabindex="-1">让你的 AI 帮你装门禁。</h1><p>复制提示词，交给这台电脑上能执行命令的 AI 助手。</p></div></div>
+      <details id="tutorial-preparation" class="tutorial-preparation">
+        <summary><span><strong>准备事项 · 第 1–3 步</strong><small>加入家庭组、绑定邮箱、登录账号；完成后可跳过。</small></span><span class="preparation-toggle" aria-hidden="true">查看</span></summary>
+        <p class="hint tutorial-capacity">1 个母账号 ＋ 最多 5 个子账号</p>
+        <ol class="tutorial-steps">
+        <li><div class="tutorial-step-heading"><span class="step-audience">母账号操作</span><h2>把子账号拉进 Google 家庭组</h2></div><p>用母账号打开 Google 家庭组，填写成员的 Google 邮箱发出邀请。每个子账号在自己的邮箱里接受邀请；一个家庭组最多加入 5 个子账号，加母账号共 6 个。</p><a class="subtle-link" href="https://families.google.com/" target="_blank" rel="noopener noreferrer">打开 Google 家庭组 ↗</a><p class="hint">如果套餐需要开启家庭共享，请先在 Google One 中打开共享，并确认成员已获得对应权益。</p></li>
+        <li><div class="tutorial-step-heading"><span class="step-audience">管理员操作</span><h2>在这里添加成员，绑定邮箱</h2></div><p>进入「成员」，填写称呼、加入家庭组的 Google 邮箱和个人百分比额度。母账号也要使用门禁时，给母账号添加一份额度并使用对应令牌安装。已有成员也可以在编辑时补绑邮箱。Google 家庭组邀请与这里的成员绑定，需要分别完成。</p><a class="subtle-link" href="#members" data-admin-only>去管理成员 →</a></li>
+        <li><div class="tutorial-step-heading"><span class="step-audience">每个成员操作</span><h2>用自己的 Google 邮箱登录</h2></div><p>打开本站，点击「使用 Google 账号登录」，选择管理员绑定的那个邮箱。登录后可以查看自己的额度和使用记录，再生成自己的安装令牌。</p></li>
+        </ol>
+      </details>
+      <section class="install-focus" aria-labelledby="install-focus-title">
+        <div class="tutorial-step-heading"><span class="step-audience">第 4 步 · 在要使用 Antigravity 的电脑上操作</span><h2 id="install-focus-title">复制给 AI，安装交给它。</h2></div>
+        <p>AI 会检查环境、安装门禁并验证配置。你只需准备自己的成员令牌，把完整提示词发给它。</p>
+        <div class="install-token-area">
+          <div class="tutorial-access"><span id="tutorial-identity">管理员绑定邮箱后，成员即可自行登录。</span><button id="self-install-token" class="outline" data-member-only>生成 / 重置我的安装令牌</button><a class="subtle-link" href="#members" data-admin-only>去成员页生成令牌 →</a></div>
+          <label for="installation-token">你的成员令牌<input id="installation-token" type="password" autocomplete="off" spellcheck="false" required pattern="agy_[a-f0-9]{64}" placeholder="粘贴已有令牌，或生成后自动填入" aria-describedby="installation-token-hint"></label>
+          <p id="installation-token-hint" class="hint">提示词会带上令牌和本站地址，只发给自己的 AI。刷新页面后需重新填写令牌。</p>
+        </div>
+        <button id="copy-install-prompt" class="primary full">复制安装提示词给我的 AI</button>
+        <p class="install-next">粘贴给 AI → 等它完成安装与检查 → 按提示重启 Antigravity</p>
+        <textarea id="install-prompt-fallback" class="prompt-fallback" readonly rows="10" aria-label="完整安装提示词，含成员令牌" hidden></textarea>
+        <details class="plain-details prompt-preview"><summary>看看 AI 会做什么</summary><pre id="installation-prompt" aria-label="安装提示词预览，不含成员令牌"></pre></details>
+        <div class="tutorial-check"><h3>安装好后，确认已经开始记账</h3><p>用自己的 Google 账号重新打开 Antigravity，发起一次模型调用，再回到「记录」查看新记录。AI 的配置检查完成后，还需要这次实际调用来确认。</p></div>
+        <details class="plain-details manual-install"><summary>需要自己安装？查看终端命令</summary><p>macOS / Linux 需 Node.js 20+，运行后按提示粘贴成员令牌。</p><pre id="tutorial-command" aria-label="门禁安装命令"></pre><button id="copy-tutorial-install" class="outline">复制安装命令</button><p>桌面端 / IDE 中将 AI Credit Overages 设为 Never；CLI 的超额点数由安装器关闭。</p></details>
+      </section>
+      <details class="plain-details tutorial-faq"><summary>登录或安装遇到问题？</summary><p>无法登录：请确认选择的邮箱与绑定邮箱完全一致，成员未被暂停或删除；还没绑定时，请让管理员编辑成员补上邮箱。</p><p>提示令牌无效：确认使用的是自己的最新令牌；重置后旧令牌会失效，需要重新安装。</p><p>没有使用记录：确认安装完成后已重启客户端，并完成过一次模型调用。Google 家庭组和本系统不会自动互相同步成员。</p></details>
+      <p class="hint tutorial-source">家庭人数说明：<a href="https://support.google.com/families/answer/6317858?hl=zh-Hans" target="_blank" rel="noopener noreferrer">Google 家庭组帮助 ↗</a>。各账号可用权益以 Google 页面显示为准。</p>
+    </section>
+  </main>
+  <div id="loading-splash" class="loading-splash" aria-live="polite">
+    <div class="loading-splash-card">
+      <div class="login-brand"><span class="wordmark">agy</span><span>家庭配额</span></div>
+      <div class="loading-bar" aria-hidden="true"><span></span></div>
+      <p>正在连接家庭工作空间…</p>
+    </div>
+  </div>
+  <dialog id="login-dialog" aria-labelledby="login-title"><div class="login-brand"><span class="wordmark">agy</span><span>家庭配额</span></div><div class="login-badges"><span>双池百分比共享</span><span>母账号实时对账</span></div><h1 id="login-title">家里的额度，<br>一起用。</h1><p class="dialog-copy">母账号管理家庭额度，成员用绑定的 Google 邮箱登录、查看用量并安装门禁。</p><button class="primary full" id="google-login" disabled>使用 Google 账号登录</button><p class="hint" id="google-login-hint">正在检查登录配置…</p><p class="hint">登录前请阅读 <a href="/privacy.html" target="_blank" rel="noopener noreferrer">隐私政策</a> 和 <a href="/terms.html" target="_blank" rel="noopener noreferrer">使用条款</a>。</p><p class="form-error" id="google-login-error" role="alert"></p><details id="token-login"><summary>使用备用管理员令牌</summary><form id="login-form"><label>管理员令牌<input id="admin-token" type="password" autocomplete="off" required minlength="32" placeholder="粘贴 ADMIN_TOKEN"></label><p class="form-error" id="login-error" role="alert"></p><button class="secondary full">连接工作空间</button><p class="hint">首次配置可用令牌连接一次母账号，之后直接使用 Google 登录。</p></form></details></dialog>
+  <dialog id="member-dialog" aria-labelledby="member-title">
+    <form id="member-form">
+      <header class="member-form-header">
+      <div class="dialog-title"><h2 id="member-title">添加成员</h2><button class="close" type="button" data-close="member-dialog" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">留一份合适的百分比份额，之后随时可以调整。</p>
+      </header>
+      <div class="member-form-body">
+      <input name="member_id" type="hidden">
+      <label class="member-name-field">怎么称呼？<input name="name" required maxlength="60" placeholder="例如：小林"></label>
+      <label class="member-email-field">Google 账号邮箱<input name="email" type="email" required maxlength="254" autocomplete="off" placeholder="例如：xiaolin@gmail.com" aria-describedby="member-email-hint"></label><p id="member-email-hint" class="hint">手动填写成员的 Google 账号邮箱，成员即可用此账号登录。修改邮箱会退出该成员的登录。</p>
+      <div class="member-share">
+        <div class="member-share-heading"><label for="member-share">按比例速算</label><output id="member-share-value" for="member-share">25%</output></div>
+        <input id="member-share" type="range" min="0" max="100" step="1" value="25" aria-describedby="member-share-hint">
+        <div class="member-share-scale" aria-hidden="true"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+        <p id="member-share-hint">按家庭可分配比例（已扣除缓冲）同步换算，也可在下方单独微调百分比。</p>
+      </div>
+      <div class="member-pools">
+        <fieldset><legend>Gemini 池 <small>Flash / Pro</small></legend><div class="form-grid"><label>5 小时上限（%）<input type="number" name="gemini_5h_limit" min="0" max="100" step="0.01" required value="25"></label><label>每周上限（%）<input type="number" name="gemini_wk_limit" min="0" max="100" step="0.01" required value="25"></label></div></fieldset>
+        <fieldset><legend>第三方池 <small>Claude / GPT</small></legend><div class="form-grid"><label>5 小时上限（%）<input type="number" name="tp_5h_limit" min="0" max="100" step="0.01" required value="25"></label><label>每周上限（%）<input type="number" name="tp_wk_limit" min="0" max="100" step="0.01" required value="25"></label></div></fieldset>
+      </div>
+      <label class="switch-row" id="enabled-label" hidden><span><strong>允许发起新调用</strong><small>暂停后，进行中调用仍可完成记账。</small></span><input type="checkbox" name="enabled" role="switch" checked></label>
+      <details id="member-token-options" class="plain-details" hidden><summary>令牌与安装</summary><p class="hint">重置后旧令牌立即失效，请先等待进行中调用完成。</p><button type="button" id="rotate-member-token" class="text-button danger-text">重置成员令牌</button></details>
+      <p class="hint member-budget-note">个人百分比上限不预扣家庭额度，同时受家庭上限与母账号真实余额约束。</p>
+      </div>
+      <footer class="member-form-footer"><p class="form-error" role="alert"></p><div class="member-form-actions"><button type="button" id="delete-member" class="text-button danger-text" hidden>删除成员</button><button class="primary">保存成员</button></div></footer>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+    <form id="confirm-form">
+      <div class="dialog-title"><h2 id="confirm-title"></h2><button class="close" type="button" data-close="confirm-dialog" aria-label="关闭">×</button></div>
+      <p id="confirm-description" class="dialog-copy"></p>
+      <p class="form-error" role="alert"></p>
+      <div class="confirm-actions"><button id="confirm-cancel" class="quiet" type="button" autofocus>取消</button><button id="confirm-submit" class="primary danger-button" type="submit"></button></div>
+    </form>
+  </dialog>
+  <dialog id="token-dialog" aria-label="成员令牌与安装"><div class="dialog-title"><h2>安装门禁</h2><button class="close" data-close="token-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">此令牌仅显示一次，请复制后妥善保存。重置会让旧令牌立即失效。</p><label>成员令牌<textarea id="generated-token" readonly rows="3" spellcheck="false"></textarea></label><button class="primary full" id="copy-token-prompt">复制安装提示词给我的 AI</button><p class="hint">提示词包含此令牌和本站地址。发给这台电脑上的 AI 助手，让它执行安装并检查配置。</p><textarea id="token-prompt-fallback" class="prompt-fallback" readonly rows="10" aria-label="完整安装提示词，含成员令牌" hidden></textarea><button class="quiet full" id="copy-token">只复制令牌</button><details class="plain-details"><summary>自己在终端安装</summary><h3>在成员电脑安装</h3><p class="dialog-copy">电脑需安装 Node.js 20+。下载后运行，按提示粘贴上面的成员令牌。</p><pre id="install-command"></pre><button class="quiet full" id="copy-install">复制安装命令</button></details><a class="subtle-link" href="#tutorial" id="token-tutorial">查看完整安装教程 →</a><p class="hint">安装器会合并已有 Hooks、备份配置并关闭 CLI 超额点数。桌面端和 IDE 的 AI Credit Overages 请手动设为 Never。</p></dialog>
+  <dialog id="mother-dialog" aria-labelledby="oauth-title"><form id="mother-form"><div class="dialog-title"><h2 id="oauth-title">登录 Google 账号</h2><button class="close" type="button" data-close="mother-dialog" aria-label="关闭">×</button></div><p id="oauth-description" class="dialog-copy">在 Google 页面选择母账号或管理员已绑定的成员邮箱，完成授权后回到这里。成员登录不会替换母账号。</p><a id="google-auth-link" class="auth-link" target="_blank" rel="noopener noreferrer">打开 Google 登录</a><p class="hint" id="oauth-hint">授权后浏览器会跳转到 localhost，页面无法打开是正常现象。复制地址栏里的完整地址，粘贴到下方完成连接。</p><label>授权后的完整地址<textarea id="callback-url" rows="4" required autocomplete="off" spellcheck="false" placeholder="http://localhost:50987/oauth-callback?state=…&amp;code=…"></textarea></label><p class="form-error" role="alert"></p><button class="primary full">完成登录</button></form></dialog>
+  <dialog id="upgrade-dialog" aria-label="更新本地守门员"><div class="dialog-title"><h2>更新本地守门员</h2><button class="close" data-close="upgrade-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">新版守门员已内置静默自动更新（每次模型调用后自动校验并原子更新本地脚本）。首次升级到支持自动更新的版本，或需要手动立即更新时，运行下方命令即可（自动复用原成员令牌）：</p><pre id="upgrade-command"></pre><button id="copy-upgrade" class="outline full">复制更新命令</button><p class="hint">首次安装请先添加成员，使用该成员的安装命令。支持自动更新后，后续脚本迭代无需再次手动执行。</p></dialog>
+  <footer class="public-links"><a href="/about.html">关于 AGY</a><a href="/privacy.html">隐私政策</a><a href="/terms.html">使用条款</a></footer>
+  <div id="toast" role="status" hidden></div>
+</body></html>

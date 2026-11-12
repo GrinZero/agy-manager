@@ -1,0 +1,19 @@
+title = "AGY source secret scanning"
+
+[extend]
+useDefault = true
+
+# This exact installed-app OAuth identity is published by the upstream project.
+# It is a public client, not a user's access/refresh token or web-client secret.
+# https://developers.google.com/identity/protocols/oauth2/native-app
+# https://github.com/lbjlaq/Antigravity-Manager/blob/main/src-tauri/src/modules/oauth.rs
+# Both the source path AND the exact value must match; other credentials still fail.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Published installed-application OAuth identity only"
+condition = "AND"
+paths = ['''(?:^|/)src/mother-account\.ts$''']
+regexTarget = "secret"
+regexes = ['''^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$''']

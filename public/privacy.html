@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>隐私政策 · AGY Family Quota</title><link rel="stylesheet" href="/info.css"></head>
+<body><header class="info-header"><a href="/about.html" class="wordmark">agy</a><a href="/">管理页面 →</a></header>
+<main class="info-page"><h1>隐私政策</h1><p class="info-date">更新日期：2026 年 11 月 11 日</p><p>本政策说明 AGY Family Quota 如何处理账号资料、Google 授权及用量数据。本实例由部署管理员提供支持。自行部署的实例由其部署管理员运营，请在登录和授权前确认所访问的站点及运营者。</p>
+<h2>收集的数据与用途</h2><ul><li>Google 登录返回的账号 ID、邮箱及基本身份资料，用于确认管理员或已绑定的成员身份。</li><li>管理员连接配额查询后，保存账号授权令牌、套餐及配额快照，用于云端刷新和展示剩余额度。</li><li>管理员手动填写的成员称呼、Google 账号邮箱、百分比预算，以及模型名称、调用标识、当量与百分比、状态和时间，用于本系统的预算分配和用量记账。</li></ul><p>本系统不收集模型提示词、对话正文或本地文件内容，不代理模型生成请求。</p>
+<h2>授权权限</h2><p>配额接口目前需要 Google Cloud 的 <code>cloud-platform</code> 权限；其授权范围比读取配额广，本应用的配额连接仅用于查询额度及相关套餐信息，不提供任意 Google Cloud 资源操作功能。成员资料由管理员手动填写；本站不申请家庭组读取权限，也不自动获取 Google 家庭成员。</p>
+<h2>保存、访问与第三方处理</h2><p>数据存储在所使用实例的 Cloudflare Workers / D1 部署中。Google access token 和 refresh token 使用部署独立密钥加密；后台会话及安装令牌在数据库中保存哈希。浏览器使用必要的 HttpOnly 会话 Cookie 保持登录，不使用广告跟踪 Cookie。</p><p>管理员可访问本部署的家庭成员与预算信息；普通成员仅可查看自己的成员信息和记录。Cloudflare 作为托管提供方会处理站点请求及部署数据，Google 会处理 OAuth 和 Google API 请求；这些提供方也会按各自政策处理必要的连接和安全日志。</p><p>共享源码中的桌面客户端 ID 和配套 secret 不包含个人账号令牌。自行部署实例的数据不会由本应用自动集中发送回原作者的实例。</p>
+<h2>Google 用户数据的使用限制</h2><p>通过 Google API 获得的信息仅用于提供和维护用户请求的账号登录、配额展示和家庭成员管理功能。我们不出售这些数据，不用于广告定向，也不用于训练通用 AI 或机器学习模型。本应用对 Google API 信息的使用与传输遵守 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>，包括 Limited Use 要求。</p>
+<h2>保留、解除授权与删除</h2><p>已连接账号的授权令牌会保留至管理员解除对应连接或删除部署数据。解除配额连接会删除对应配额授权。你还可以在 <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener noreferrer">Google 账号的第三方连接</a> 中撤销应用访问权。</p><p>退出登录撤销当前浏览器会话，但不解除云端账号连接。删除成员会停用该成员并保留历史用量，避免已用预算被退回。需要删除其他账号数据或整套实例的数据时，请联系该实例管理员；自行部署者可删除其数据库和配置。备份及托管方的日志保留按部署者配置和提供方政策处理。</p>
+<h2>联系与更新</h2><p>如对本实例的数据处理或删除有疑问，请联系该实例的部署管理员。数据处理方式改变时，本页面将更新说明和日期。</p></main>
+<footer class="info-footer"><a href="/about.html">应用介绍</a><a href="/terms.html">使用条款</a><a href="/">管理页面</a></footer></body></html>

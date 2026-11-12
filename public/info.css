@@ -1,0 +1,13 @@
+@import url('/style.css');
+.info-header{max-width:860px;margin:auto;padding:28px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+.info-header a{color:var(--green);text-decoration:none}
+.info-page{max-width:860px;margin:16px auto 64px;padding:36px 32px;background:var(--surface);border:1px solid var(--line);border-radius:16px}
+.info-page h1{font-size:32px;line-height:1.3;margin:0 0 16px}
+.info-page h2{font-size:19px;margin:30px 0 12px}
+.info-page p,.info-page li{font-size:15px;line-height:1.85;margin:12px 0;overflow-wrap:anywhere}
+.info-page ul{padding-left:24px}
+.info-page a,.info-footer a{color:var(--green);text-decoration:underline;text-underline-offset:3px}
+.info-page .info-date{color:var(--muted);font-size:13px}
+.info-footer{max-width:860px;margin:0 auto 40px;padding:0 24px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px}
+.info-action{display:inline-block;margin:16px 0;padding:12px 20px;border:1px solid var(--green);border-radius:8px}
+@media(max-width:700px){.info-page{margin:8px 16px 36px;padding:24px 20px}.info-page h1{font-size:27px}.info-page p,.info-page li{font-size:14px}.info-header{padding:24px}.info-footer{gap:18px}}
