@@ -1,6 +1,6 @@
 import {randomBytes} from 'node:crypto';
 import {readFile,writeFile,chmod} from 'node:fs/promises';
-import {spawnSync} from 'node:child_process';
+import {wrangler} from './wrangler.mjs';
 
 const local=process.argv.includes('--local');
 if(!local&&!process.argv.includes('--production'))throw Error('请指定 --local 或 --production');
@@ -15,7 +15,7 @@ if(!key) {
 if(!/^[a-f0-9]{64}$/.test(key))throw Error('ACCOUNT_ENCRYPTION_KEY 需要 64 位十六进制密钥');
 await chmod(file,0o600);
 if(!local) {
-  const result=spawnSync('npx',['wrangler','secret','put','ACCOUNT_ENCRYPTION_KEY'],{input:key+'\n',encoding:'utf8'});
+  const result=wrangler(['secret','put','ACCOUNT_ENCRYPTION_KEY'],{input:key+'\n',encoding:'utf8'});
   process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');
   if(result.status!==0)process.exitCode=result.status||1;
 }
