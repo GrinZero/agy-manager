@@ -6,6 +6,10 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
+import {request as httpRequest} from 'node:http';
+import {request as httpsRequest} from 'node:https';
+import {connect as netConnect, isIP} from 'node:net';
+import {connect as tlsConnect} from 'node:tls';
 
 const REQUEST_TIMEOUT_MS = 10000;
 const REQUEST_BUDGET_MS = 16000;
@@ -95,6 +99,167 @@ export function validateUrl(value) {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw Error('HTTPS is required');
   return url.origin;
 }
+export function validateProxy(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'http:') throw Error('Use an HTTP proxy URL');
+  if (url.search || url.hash || url.pathname !== '/') throw Error('Use a proxy origin URL');
+  return url;
+}
+function isLocalHostname(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host.startsWith('127.');
+}
+function proxyAuthorization(proxy) {
+  if (!proxy.username) return '';
+  const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+  return `Basic ${Buffer.from(credentials).toString('base64')}`;
+}
+function requestHeaders(headers, host) {
+  const value = {};
+  new Headers(headers || {}).forEach((v, k) => { value[k] = v; });
+  value.host = host;
+  return value;
+}
+function requestResult(response, chunks) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(response.headers)) {
+    if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(', ') : String(value));
+  }
+  const status = response.statusCode || 502;
+  const body = [101, 204, 205, 304].includes(status) ? null : Buffer.concat(chunks);
+  return new Response(body, {status, statusText: response.statusMessage, headers});
+}
+function nodeRequest(options, body, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false, request, response;
+    const onAbort = () => {
+      request?.destroy();
+      response?.destroy();
+      finish(reject, signal.reason instanceof Error ? signal.reason : Object.assign(Error('Aborted'), {name: 'AbortError'}));
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      fn(value);
+    };
+    if (signal?.aborted) return finish(reject, signal.reason || Object.assign(Error('Aborted'), {name: 'AbortError'}));
+    try {
+      const sendRequest = options.protocol === 'https:' ? httpsRequest : httpRequest;
+      request = sendRequest(options, res => {
+        response = res;
+        const chunks = [];
+        let size = 0;
+        res.on('data', chunk => {
+          size += chunk.length;
+          if (size > 8 * 1024 * 1024) {
+            request.destroy(Object.assign(Error('Service response too large'), {retryable: false}));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => finish(resolve, requestResult(res, chunks)));
+        res.on('error', error => finish(reject, error));
+      });
+    } catch (error) {
+      return finish(reject, error);
+    }
+    signal?.addEventListener('abort', onAbort, {once: true});
+    request.on('error', error => finish(reject, Object.assign(error, {retryable: true})));
+    request.end(body);
+    return null;
+  });
+}
+function connectTunnel(target, proxy, signal) {
+  return new Promise((resolve, reject) => {
+    const proxyHost = proxy.hostname.replace(/^\[|\]$/g, '');
+    const raw = netConnect({host: proxyHost, port: Number(proxy.port) || 80});
+    let settled = false, secure, header = Buffer.alloc(0);
+    const onAbort = () => fail(signal.reason instanceof Error ? signal.reason : Object.assign(Error('Aborted'), {name: 'AbortError'}));
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      raw.removeListener('data', onData);
+      fn(value);
+    };
+    const fail = error => {
+      finish(reject, error);
+      raw.destroy();
+      secure?.destroy();
+    };
+    const onData = chunk => {
+      header = Buffer.concat([header, chunk]);
+      if (header.length > 16 * 1024) return fail(Object.assign(Error('Proxy CONNECT header too large'), {retryable: false}));
+      const end = header.indexOf('\r\n\r\n');
+      if (end < 0) return null;
+      const match = /^HTTP\/1\.[01] (\d{3})/i.exec(header.subarray(0, end).toString('latin1'));
+      if (match?.[1] !== '200') {
+        const status = Number(match?.[1]) || 0;
+        return fail(Object.assign(Error(`Proxy CONNECT ${status || 'failed'}`), {retryable: ![403, 407].includes(status)}));
+      }
+      const rest = header.subarray(end + 4);
+      raw.removeListener('data', onData);
+      if (rest.length) raw.unshift(rest);
+      const hostname = target.hostname.replace(/^\[|\]$/g, '');
+      try {
+        secure = tlsConnect({socket: raw, servername: isIP(hostname) ? undefined : hostname, ALPNProtocols: ['http/1.1']});
+      } catch (error) {
+        return fail(error);
+      }
+      secure.once('error', error => fail(Object.assign(error, {retryable: true})));
+      secure.once('secureConnect', () => finish(resolve, secure));
+      return null;
+    };
+    if (signal?.aborted) return fail(signal.reason || Object.assign(Error('Aborted'), {name: 'AbortError'}));
+    raw.once('connect', () => {
+      const authorization = proxyAuthorization(proxy);
+      const authority = `${target.hostname}:${target.port || (target.protocol === 'https:' ? 443 : 80)}`;
+      raw.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n${authorization ? `Proxy-Authorization: ${authorization}\r\n` : ''}Proxy-Connection: Keep-Alive\r\n\r\n`);
+    });
+    raw.on('data', onData);
+    raw.once('error', error => fail(Object.assign(error, {retryable: true})));
+    signal?.addEventListener('abort', onAbort, {once: true});
+    return null;
+  });
+}
+export async function proxyFetch(input, init = {}, proxyValue) {
+  const target = new URL(input);
+  if (!['http:', 'https:'].includes(target.protocol)) throw Error('Unsupported target protocol');
+  const proxy = validateProxy(proxyValue);
+  const options = {
+    protocol: target.protocol,
+    method: init.method || 'GET',
+    headers: requestHeaders(init.headers, target.host),
+    body: init.body,
+    signal: init.signal
+  };
+  if (target.protocol === 'http:') {
+    const authorization = proxyAuthorization(proxy);
+    return nodeRequest({
+      protocol: 'http:',
+      host: proxy.hostname.replace(/^\[|\]$/g, ''),
+      port: Number(proxy.port) || 80,
+      method: options.method,
+      path: target.href,
+      headers: {...options.headers, ...(authorization ? {'proxy-authorization': authorization} : {})}
+    }, options.body, init.signal);
+  }
+  const tunnel = await connectTunnel(target, proxy, init.signal);
+  return nodeRequest({
+    protocol: 'https:',
+    host: target.hostname.replace(/^\[|\]$/g, ''),
+    port: Number(target.port) || 443,
+    method: options.method,
+    path: `${target.pathname}${target.search}`,
+    headers: options.headers,
+    agent: false,
+    createConnection: () => tunnel
+  }, options.body, init.signal);
+}
+export function requestFetch(config, url, init) {
+  return config.proxy && !isLocalHostname(new URL(url).hostname) ? proxyFetch(url, init, config.proxy) : fetch(url, init);
+}
 export async function send(config, action, payload, timeout = REQUEST_TIMEOUT_MS, retries = 2, meta = null) {
   const url = `${validateUrl(config.url)}/${action}`, requestBody = JSON.stringify(payload);
   const deadline = performance.now() + Math.min(REQUEST_BUDGET_MS, timeout * (retries + 1) + 1000);
@@ -102,7 +267,7 @@ export async function send(config, action, payload, timeout = REQUEST_TIMEOUT_MS
   for (let attempt = 0; attempt <= retries; attempt++) {
     let retryAfter = 0;
     try {
-      const response = await fetch(url, {
+      const response = await requestFetch(config, url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${config.token}`},
         // Cold proxy/TLS connections can take more than five seconds. Later attempts
@@ -145,7 +310,7 @@ export async function selfUpdate(root, config, expectedSha256, timeout = REQUEST
   const targetPath = join(root, 'agy-quota.mjs');
   const current = await readFile(targetPath, 'utf8').catch(() => '');
   if (current && createHash('sha256').update(current).digest('hex') === expectedSha256) return false;
-  const res = await fetch(`${validateUrl(config.url)}/client/agy-quota.mjs`, {signal: AbortSignal.timeout(timeout)});
+  const res = await requestFetch(config, `${validateUrl(config.url)}/client/agy-quota.mjs`, {signal: AbortSignal.timeout(timeout)});
   if (!res.ok) return false;
   const next = await res.text();
   if (!next.startsWith('#!/usr/bin/env node') || createHash('sha256').update(next).digest('hex') !== expectedSha256) return false;

@@ -173,6 +173,9 @@ body[data-auth=loading] .loading-splash{display:grid;place-items:center;min-heig
 /* OS picker for the copy-paste install / upgrade commands. */
 .install-os-label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px;color:var(--muted)}
 .install-os-label select{width:auto;min-width:150px;margin:0;font-size:13px}
+.install-proxy-label{align-items:flex-start}
+.install-proxy-label input{flex:1;min-width:0;margin:0;font-size:13px}
+.install-proxy-label input[aria-invalid="true"]{border-color:var(--danger)}
 
 /* Actionable empty state on the activity page. */
 .empty-steps{display:inline-block;text-align:left;margin:18px auto 4px;padding-left:22px;max-width:560px;line-height:1.9;color:var(--muted)}

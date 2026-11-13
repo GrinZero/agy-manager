@@ -6,6 +6,12 @@ import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 
 const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
+export function normalizeProxy(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'http:') throw Error('代理必须是 HTTP 代理');
+  if (url.search || url.hash || url.pathname !== '/') throw Error('代理地址只写到 origin，例如 http://127.0.0.1:7897');
+  return url.href.endsWith('/') ? url.href.slice(0, -1) : url.href;
+}
 
 // Antigravity runs hooks with `sh -c` on Unix and `cmd /c` on Windows, with the
 // working directory set to the directory containing hooks.json.
@@ -98,6 +104,8 @@ async function install() {
     const url=new URL(option('--url') || previous.url || '');
     if(url.username||url.password||url.search||url.hash||url.pathname!=='/'||
       !(url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname))) throw Error('请通过 --url 指定 HTTPS 服务地址（本地允许 http://127.0.0.1:8787）');
+    const proxyValue=args.includes('--no-proxy')?'':option('--proxy') || previous.proxy || '';
+    const proxy=proxyValue?normalizeProxy(proxyValue):'';
     const tokenFile=option('--token-file');
     const token=(tokenFile?await readFile(tokenFile,'utf8'):args.includes('--upgrade')&&previous.token?previous.token:await tokenPrompt()).trim();
     if(!/^agy_[a-f0-9]{64}$/.test(token))throw Error('成员令牌格式错误');
@@ -107,7 +115,7 @@ async function install() {
     await mkdir(root,{recursive:true,mode:0o700});await chmod(root,0o700);
     const runtimePath=join(root,'agy-quota.mjs');
     await save(runtimePath,runtime,0o700);
-    await save(join(root,'credentials.json'),JSON.stringify({url:url.origin,token},null,2)+'\n');
+    await save(join(root,'credentials.json'),JSON.stringify({url:url.origin,token,...(proxy?{proxy}:{})},null,2)+'\n');
     const plan=hookPlan(process.platform,process.execPath,runtimePath,root);
     for(const launcher of plan.launchers){
       await mkdir(dirname(launcher.path),{recursive:true,mode:0o700});
@@ -127,7 +135,7 @@ async function install() {
     settings.useG1Credits=false;
     await save(settingsPath,JSON.stringify(settings,null,2)+'\n');
     await save(hooksPath,JSON.stringify(hooks,null,2)+'\n');
-    console.log(`Hook 自检通过（${process.platform==='win32'?'cmd /c':'sh -c'}）。已安装至 ${root}\n已合并全局 Hooks，并设置 CLI useG1Credits=false。额度检查失败时暂停新调用。\n原配置备份后缀：${suffix}\n重启 agy；桌面端和 IDE 请手动将 AI Credit Overages 设为 Never。`);
+    console.log(`Hook 自检通过（${process.platform==='win32'?'cmd /c':'sh -c'}）。已安装至 ${root}\n已合并全局 Hooks，并设置 CLI useG1Credits=false。额度检查失败时暂停新调用。${proxy?`\n额度服务代理：${new URL(proxy).host}`:''}\n原配置备份后缀：${suffix}\n重启 agy；桌面端和 IDE 请手动将 AI Credit Overages 设为 Never。`);
   }
 }
 const isMain = process.argv[1] && await realpath(process.argv[1]).catch(()=>process.argv[1]) === await realpath(fileURLToPath(import.meta.url)).catch(()=>fileURLToPath(import.meta.url));
