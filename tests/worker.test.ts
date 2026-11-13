@@ -205,7 +205,7 @@ test('percentage balance notification, weekly <20% warning, zero limits, disabli
   const m=await member({gemini_5h_limit:50,gemini_wk_limit:0.15,tp_5h_limit:0});
   const firstTurn=await request('/check',m.token,call(0));
   assert.equal(firstTurn.body.injectSteps?.length,1);
-  assert.equal(firstTurn.body.injectSteps[0]?.systemMessage?.systemMessage,'');
+  assert.match(firstTurn.body.injectSteps[0]?.systemMessage?.systemMessage ?? '',/【个人配额余额】/);
   assert.match(firstTurn.body.injectSteps[0]?.systemMessage?.metadata?.user_markdown ?? '',/【个人配额余额】.*个人 5h 0\.1%\/50%，7d 0\.025%\/0\.15%。本轮预冻结 5h 0\.1% \/ 7d 0\.025%，个人剩余可用 5h 49\.9% \/ 7d 0\.125%。/);
   await request('/commit',m.token,call(0));
   const contStep=await request('/check',m.token,call(1));

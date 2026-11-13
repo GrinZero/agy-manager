@@ -284,7 +284,10 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
   if (i.invocationNum % 10_000 === 0) {
     const base = memberBalanceMessage(member, pool, mu, ml, reqPct);
     const userMarkdown = lowBalance ? `${base} 配额余量不足 20%，请留意后续用量。` : base;
-    return {quota, injectSteps: [{systemMessage: {systemMessage: '', metadata: {user_markdown: userMarkdown}}}]};
+    // Antigravity 2.31.x 的 hook 解析器在 systemMessage 内层为空字符串时会 panic
+    // ("type mismatch: cannot convert string to message")，导致整个 PreInvocation 失败
+    // 且余额提示丢失。内层必须填入与 user_markdown 相同的文本。
+    return {quota, injectSteps: [{systemMessage: {systemMessage: userMarkdown, metadata: {user_markdown: userMarkdown}}}]};
   }
   return {quota, injectSteps: []};
 }
