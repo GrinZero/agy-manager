@@ -7,6 +7,9 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 
+const REQUEST_TIMEOUT_MS = 10000;
+const REQUEST_BUDGET_MS = 16000;
+
 async function scanLatestPlannerStep(transcriptPath, minStepIndex = 0, stopAtUserInput = true) {
   if (typeof transcriptPath !== 'string' || !transcriptPath) return null;
   let handle;
@@ -92,9 +95,9 @@ export function validateUrl(value) {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw Error('HTTPS is required');
   return url.origin;
 }
-export async function send(config, action, payload, timeout = 5000, retries = 2, meta = null) {
+export async function send(config, action, payload, timeout = REQUEST_TIMEOUT_MS, retries = 2, meta = null) {
   const url = `${validateUrl(config.url)}/${action}`, requestBody = JSON.stringify(payload);
-  const deadline = performance.now() + timeout * (retries + 1) + 1000;
+  const deadline = performance.now() + Math.min(REQUEST_BUDGET_MS, timeout * (retries + 1) + 1000);
   // All actions are idempotent. Keep the exact invocation identity and body on retries.
   for (let attempt = 0; attempt <= retries; attempt++) {
     let retryAfter = 0;
@@ -102,7 +105,9 @@ export async function send(config, action, payload, timeout = 5000, retries = 2,
       const response = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: `Bearer ${config.token}`},
-        body: requestBody, signal: AbortSignal.timeout(timeout)
+        // Cold proxy/TLS connections can take more than five seconds. Later attempts
+        // use only the remaining budget, so retries cannot extend the hook deadline.
+        body: requestBody, signal: AbortSignal.timeout(Math.max(1, Math.min(timeout, Math.floor(deadline - performance.now()))))
       });
       if (!response.ok) {
         const retryable = [408, 429].includes(response.status) || response.status >= 500 && response.status <= 599;
@@ -124,8 +129,8 @@ export async function send(config, action, payload, timeout = 5000, retries = 2,
       const transient = error.retryable === true || error instanceof TypeError || ['TimeoutError', 'AbortError'].includes(error.name);
       if (!transient || attempt === retries) throw error;
       const delay = Math.max(200 * 2 ** attempt + Math.floor(Math.random() * 100), retryAfter);
-      // Respect Retry-After; stop if another full attempt cannot fit in the budget.
-      if (performance.now() + delay + timeout > deadline) throw error;
+      // Respect Retry-After and leave enough time for a useful final attempt.
+      if (performance.now() + delay + Math.min(timeout, 1000) > deadline) throw error;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -135,7 +140,7 @@ function checkSyntax(filePath) {
     execFile(process.execPath, ['--check', filePath], {timeout: 1500}, error => error ? reject(error) : resolve());
   });
 }
-export async function selfUpdate(root, config, expectedSha256, timeout = 2500) {
+export async function selfUpdate(root, config, expectedSha256, timeout = REQUEST_TIMEOUT_MS) {
   if (typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expectedSha256)) return false;
   const targetPath = join(root, 'agy-quota.mjs');
   const current = await readFile(targetPath, 'utf8').catch(() => '');
@@ -177,7 +182,7 @@ async function flush(root, config) {
     if (!saved?.payload || typeof saved.destination !== 'string') { await unlink(path).catch(() => {}); continue; }
     if (saved.destination !== destination(config)) continue;
     try {
-      await send(config, 'commit', saved.payload, 700, 0);
+      await send(config, 'commit', saved.payload, REQUEST_TIMEOUT_MS, 0);
       await unlink(path).catch(() => {});
     } catch (e) {
       if (e.retryable === false && ![401, 403].includes(e.status)) { await unlink(path).catch(() => {}); continue; }
@@ -204,7 +209,7 @@ export async function main() {
   const pendingPath = action === 'commit' ? await spool(root, config, payload) : null;
   const meta = {};
   let response;
-  try { response = await send(config, action, payload, 5000, 2, meta); }
+  try { response = await send(config, action, payload, REQUEST_TIMEOUT_MS, 2, meta); }
   catch (e) {
     if (pendingPath && e.retryable === false && ![401, 403].includes(e.status)) await unlink(pendingPath).catch(() => {});
     process.stderr.write(`[agy-quota] ${e.message}; 额度检查失败时暂停新调用\n`);
@@ -213,9 +218,10 @@ export async function main() {
   process.stdout.write(JSON.stringify(response) + '\n');
   emitted = true;
   if (pendingPath) await unlink(pendingPath).catch(() => {});
+  // Apply updates before replay so a slow outbox cannot indefinitely starve updates.
+  if (meta.clientSha256) await selfUpdate(root, config, meta.clientSha256).catch(() => {});
   // Retry AFTER today's check; never extend admission latency with an offline queue.
   if (action !== 'release') await flush(root, config).catch(() => {});
-  if (meta.clientSha256) await selfUpdate(root, config, meta.clientSha256).catch(() => {});
   return null;
 }
 const isMain = process.argv[1] && await realpath(process.argv[1]).catch(() => process.argv[1]) === await realpath(fileURLToPath(import.meta.url)).catch(() => fileURLToPath(import.meta.url));

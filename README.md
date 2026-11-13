@@ -86,7 +86,9 @@ fork 后复制 `wrangler.example.json` 为本机的 `wrangler.json`，再按上�
 
 ## 给成员安装
 
-在管理页添加成员，复制一次性展示的成员令牌和安装命令。电脑需有 Node.js，支持 macOS / Linux。
+在管理页添加成员，复制一次性展示的成员令牌和安装命令。电脑需有 Node.js，支持 macOS / Linux / Windows。安装 / 更新命令按成员电脑的系统分两套（页面上有选择器）：macOS / Linux 用 `curl` + `/tmp` + 单引号，Windows 用 `curl.exe` + 相对文件名 + 不带引号的 URL；Windows PowerShell 5.1 把 `curl` 别名成了 `Invoke-WebRequest`，所以必须显式用 `curl.exe`，且两行命令不用 `&&` 连接。
+
+Windows 下安装器会在守门员目录写入 `run.cmd` 启动器（用 `%~dp0` 自定位脚本、Node 路径失效时回退到 PATH 中的 `node`），`hooks.json` 用它作为相对路径命令，避免 `cmd /c` 解析带空格的绝对路径时静默失败。安装结束前会用目标 shell 实际试跑一次 Hook 并校验输出是合法 JSON，只有打印「Hook 自检通过」才算成功；自检失败不会写入 `hooks.json`。从旧版安装升级时请重新运行安装器（或「更新本地守门员」）并重启客户端，否则 Hooks 不会执行、管理页「记录」也不会有流水。
 
 也可在本仓库运行：
 
@@ -101,6 +103,7 @@ node public/client/install.mjs --url https://YOUR-WORKER.workers.dev
 - 合并 `~/.gemini/config/hooks.json`，保留其他 Hooks；注册 `PreInvocation`、`PostInvocation`、`Stop`。
 - 将依赖为零的 Node Hook 和权限为 `0600` 的凭据写到 `~/.gemini/config/agy-family-quota/`。
 - 合并 `~/.gemini/antigravity-cli/settings.json` 并设置 `useG1Credits: false`。
+- Windows 下额外写入 `run.cmd` 启动器；安装完成前用目标 shell 试跑一次 Hook 并校验 JSON 输出（不发起网络请求、不写流水），自检失败即报错且不更新 `hooks.json`。
 - 修改前备份原文件，后缀 `.backup-时间戳`；遇到无效 JSON 时停止，不覆盖原配置。
 
 重启原生客户端。桌面端 / IDE 的 **AI Credit Overages → Never** 需要手动设置。全局 Hook 覆盖支持此协议的 App、CLI、IDE，但仍应分别做一次拦截验收。
