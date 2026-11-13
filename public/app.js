@@ -113,7 +113,7 @@ function poolCard(pool) {
   const card = node('article', `pool-card${gemini ? '' : ' tp'}${view.fresh ? '' : ' is-stale'}`);
   const top = node('div', 'pool-card-top'), title = node('div', 'pool-title');
   title.append(node('h2', '', gemini ? 'Gemini' : 'Claude / GPT'));
-  if (gemini) title.append(node('p', '', 'Flash / Pro'));
+  if (gemini) title.append(node('p', '', 'Carbon / Argon / Hydrogen / Flash / Orchestrator'));
   top.append(title, node('span', `availability${view.reason ? ' warning' : ''}`, view.label)); card.append(top);
   const five = view.windows.fiveHour, week = view.windows.week;
   const value = node('div', 'quota-value'), amount = node('div', 'quota-number');
@@ -212,7 +212,25 @@ function renderEvents() {
     model.append(node('div', '', event.model_name), node('span', '', eventDetail(event)));
     row.append(who, model, node('div', 'event-points', `${number(eventPercent(event, 'fiveHour'))}%`), node('span', `state-tag ${state === 'expired' ? 'released' : state}`, names[state] || state)); return row;
   });
-  if (!rows.length) rows.push(node('div', 'empty', data.events.length ? '没有匹配的记录，试试其他成员或模型。' : '还没有使用记录。成员完成安装并调用模型后，会出现在这里。'));
+  if (!rows.length) {
+    const empty = node('div', 'empty');
+    if (data.events.length) {
+      empty.append(node('strong', '', '没有匹配的记录'), node('p', '', '试试清空搜索词或切换状态筛选；筛选范围只包含最近 80 条记录。'));
+    } else {
+      empty.append(node('strong', '', '还没有收到使用记录'));
+      empty.append(node('p', '', '流水由每台电脑上的本地守门员在调用前后上报，官方额度消耗不会自动变成记录。'));
+      if (viewerRole === 'admin' && data.members?.length) empty.append(node('p', '', `已添加 ${data.members.length} 位成员，但服务端还没有收到任何门禁上报。`));
+      const steps = node('ol', 'empty-steps');
+      steps.append(
+        node('li', '', '成员在「教程」生成安装令牌，重新运行安装 / 更新命令，并确认安装输出里有「Hook 自检通过」。'),
+        node('li', '', '升级过系统、更换过 Node.js 路径后也要重新安装一次；完全重启 Antigravity 客户端，再调用一次模型。'),
+        node('li', '', '回到本页点击右上角「刷新」。')
+      );
+      empty.append(steps);
+      const link = node('a', 'subtle-link', '查看安装教程 →'); link.href = '#tutorial'; empty.append(link);
+    }
+    rows.push(empty);
+  }
   $('#events').replaceChildren(...rows); $('#event-count').textContent = `显示 ${events.length} / ${data.events.length} 条已加载记录${search || status ? ' · 仅筛选最近 80 条' : ''}`;
 }
 function renderMother() {
@@ -381,9 +399,33 @@ function syncMemberShare() {
   }
   showMemberShare(share === undefined);
 }
-function installCommand() {
-  const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
-  return `curl -fsS ${quote(location.origin+'/client/install.mjs')} -o /tmp/agy-quota-install.mjs\nnode /tmp/agy-quota-install.mjs --url ${quote(location.origin)}`;
+// No single download command works in every shell: Windows PowerShell 5.1 aliases
+// `curl` to Invoke-WebRequest, while macOS/Linux have no `curl.exe` and cmd/PowerShell
+// do not understand POSIX single quotes or /tmp. Emit one explicit command per OS.
+// Two separate lines (no &&): Windows PowerShell 5.1 does not support &&.
+function currentInstallOS() {
+  return /win/i.test(navigator.platform || navigator.userAgent || '') ? 'windows' : 'posix';
+}
+function installCommand(os = currentInstallOS(), extra = '') {
+  const win = os === 'windows';
+  const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
+  // An origin is scheme://host[:port] - no shell metacharacters. Leave it bare on
+  // Windows: cmd /C strips the outer quotes from a spawned command line and can
+  // leave a trailing quote attached to the URL, which curl rejects as a bad port.
+  const bare = s => s;
+  const q = win ? bare : quote;
+  const file = win ? 'agy-quota-install.mjs' : '/tmp/agy-quota-install.mjs';
+  const curl = win ? 'curl.exe' : 'curl';
+  return `${curl} -fsS ${q(location.origin + '/client/install.mjs')} -o ${win ? file : quote(file)}\n` +
+    `node ${win ? file : quote(file)} --url ${q(location.origin)}${extra ? ' ' + extra : ''}`;
+}
+function renderInstallCommands() {
+  const os = document.querySelector('[data-install-os]')?.value || currentInstallOS();
+  document.querySelectorAll('[data-install-os]').forEach(select => { select.value = os; });
+  const value = installCommand(os);
+  $('#install-command').textContent = value;
+  $('#tutorial-command').textContent = value;
+  $('#upgrade-command').textContent = installCommand(os, '--upgrade');
 }
 function installationPrompt(token = '【复制时会自动填入你的成员令牌】') {
   return `请直接在我当前这台电脑上安装 AGY 家庭配额门禁，并完成配置检查。请实际执行，不要只给我一份操作教程。目标是我日常运行 Antigravity 的本机；如果你只能访问云端沙箱或容器，无法操作我的电脑，请说明这个限制，不要在远程环境安装后宣称本机已经完成。
@@ -394,10 +436,10 @@ function installationPrompt(token = '【复制时会自动填入你的成员令�
 这份令牌用于把本机调用记入我的个人额度。请只在本机安装过程中使用它，不要在命令行参数、终端输出、日志或最后的回复中回显令牌。
 
 请依次完成：
-1. 检查当前系统和 Node.js。安装器支持 macOS / Linux，需要 Node.js 20+。缺少依赖时按本机环境处理；如果当前工具无法执行命令，或系统不支持，请明确告诉我卡在哪里，不要声称已经安装。
-2. 用权限为 0700 的独立临时目录下载 ${location.origin}/client/install.mjs 并检查脚本。将上面的成员令牌写入该目录内权限为 0600 的临时文件，通过 --token-file 传入，避免交互输入和把令牌放进命令行。
-3. 使用真实用户的主目录执行安装器，命令结构为：node <临时目录>/install.mjs --url '${location.origin}' --token-file <临时令牌文件>。请用本机 shell 正确引用实际路径，不要原样执行尖括号占位符，也不要安装到临时 HOME。安装器会合并已有 Hooks、备份原配置，并设置 CLI useG1Credits=false。若已有门禁，以本次提供的地址和令牌更新；保留其他 Hooks 和用户设置，遇到无效 JSON 应停止并说明问题。
-4. 检查 ~/.gemini/config/hooks.json 中 family-quota-guard 已启用，PreInvocation、PostInvocation、Stop 分别连接 check、commit、release；检查脚本文件存在、凭据权限为 0600、CLI useG1Credits 为 false。门禁单次主请求时限必须为 5 秒；临时网络错误、HTTP 408/429/5xx 最多重试 2 次（总共最多 3 次尝试），使用指数退避与随机抖动，并遵守 Retry-After；鉴权失败、参数错误和额度不足不重试。脚本总时限为 16.5 秒，三类 Hooks 的外层 timeout 均为 18 秒，避免外层提前杀死进程；如已有本机配置不同，备份后调整，并保留超时暂停新调用的行为。读取凭据时只在内存核对地址和令牌，不要打印文件内容。请求 ${location.origin}/health 确认服务连通性；这只能验证服务可达，不代表令牌或实际调用已验收。完成后删除临时令牌文件。
+1. 检查当前系统和 Node.js。安装器支持 macOS / Linux / Windows，需要 Node.js 20+。按目标系统选择 shell：macOS / Linux 用终端（sh/bash/zsh），Windows 用 cmd 或 PowerShell；命令中的引号风格要与之匹配，Windows 请用双引号，不要照搬单引号写法。缺少依赖时按本机环境处理；如果当前工具无法执行命令，或系统不支持，请明确告诉我卡在哪里，不要声称已经安装。
+2. 新建独立临时目录（macOS / Linux 可用 mktemp -d 并设为 0700；Windows 可在 %TEMP% 下新建目录，chmod 相关权限在 Windows 忽略），下载 ${location.origin}/client/install.mjs 到该目录并检查脚本。将上面的成员令牌写入同一目录内的临时文件（类 Unix 设为 0600），通过 --token-file 传入，避免交互输入和把令牌放进命令行。
+3. 使用真实用户的主目录执行安装器，命令结构为：node <临时目录>/install.mjs --url <服务地址> --token-file <临时令牌文件>。请用本机 shell 正确引用实际路径，不要原样执行尖括号占位符，也不要安装到临时 HOME。安装器会合并已有 Hooks、备份原配置，设置 CLI useG1Credits=false，并实际试跑一次 Hook 做自检；只有看到「Hook 自检通过」才算安装成功，自检失败要停下来并把报错原样告诉我。若已有门禁，以本次提供的地址和令牌更新；保留其他 Hooks 和用户设置，遇到无效 JSON 应停止并说明问题。
+4. 检查 ~/.gemini/config/hooks.json 中 family-quota-guard 已启用，PreInvocation、PostInvocation、Stop 分别连接 check、commit、release；检查 agy-quota.mjs 存在（Windows 还应有同目录的 run.cmd 启动器）、凭据权限为 0600（Windows 忽略）、CLI useG1Credits 为 false。门禁单次主请求时限必须为 10 秒，所有主请求尝试共用 16 秒网络预算，后续尝试按剩余时间缩短；临时网络错误、HTTP 408/429/5xx 最多重试 2 次（总共最多 3 次尝试），使用指数退避与随机抖动，并遵守 Retry-After；鉴权失败、参数错误和额度不足不重试。脚本总时限为 16.5 秒，三类 Hooks 的外层 timeout 均为 18 秒，避免外层提前杀死进程；如已有本机配置不同，备份后调整，并保留超时暂停新调用的行为。读取凭据时只在内存核对地址和令牌，不要打印文件内容。请求 ${location.origin}/health 确认服务连通性；这只能验证服务可达，不代表令牌或实际调用已验收。完成后删除临时令牌文件。
 5. 如果你能操作 Antigravity 桌面端 / IDE 设置，将 AI Credit Overages 设为 Never；无法操作时，明确告诉我这个设置需要在哪里完成。不要自动结束我正在运行的会话。
 
 最后用简短中文告诉我：实际安装了什么、哪些检查通过、哪些还未完成，以及是否需要我重启 Antigravity。重启后我会用自己的 Google 账号调用一次模型，再在 ${location.origin}/#activity 查看记录。不要把静态配置检查说成实际调用验证，不要为验证而改动家庭额度或制造虚假账单。`;
@@ -418,7 +460,7 @@ async function copyInstallationPrompt(input, fallback) {
 function showToken(result) {
   clearPromptFallbacks();
   $('#generated-token').value=result.token;$('#installation-token').value=result.token;$('#installation-token').setCustomValidity('');
-  $('#install-command').textContent=installCommand();$('#token-dialog').showModal();
+  renderInstallCommands();$('#token-dialog').showModal();
 }
 function numericForm(form,fields) {return Object.fromEntries(fields.map(k=>[k,Number(form.elements[k].value)]));}
 async function saveForm(form,fn) {const buttons=form.querySelectorAll('button.primary, #delete-member'),err=form.querySelector('.form-error');buttons.forEach(btn=>btn.disabled=true);err.textContent='';try{await fn();}catch(e){err.textContent=e.message;}finally{buttons.forEach(btn=>btn.disabled=false);}}
@@ -520,15 +562,15 @@ $('#mother-form').onsubmit=e=>{e.preventDefault();saveForm(e.currentTarget,async
   toast(viewerRole==='member'?'已登录，可以查看自己的额度并安装门禁':'母账号已登录，可查看官方额度');
 });};
 $('#mother-dialog').addEventListener('close',()=>{$('#callback-url').value='';$('#google-auth-link').removeAttribute('href');if(!data)$('#login-dialog').showModal();});
-$('#upgrade-client').onclick=()=>{const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";$('#upgrade-command').textContent=`curl -fsS ${quote(location.origin+'/client/install.mjs')} -o /tmp/agy-quota-install.mjs\nnode /tmp/agy-quota-install.mjs --url ${quote(location.origin)} --upgrade`;$('#upgrade-dialog').showModal();};
-setInterval(() => { if (data && !document.hidden) refresh(true).catch(error => toast(error.message)); }, 30000);
+$('#upgrade-client').onclick=()=>{renderInstallCommands();$('#upgrade-dialog').showModal();};
+setInterval(() => { if (data && !document.hidden) refresh().catch(error => toast(error.message)); }, 30000);
 setInterval(() => {
   if (!data || document.hidden) return;
   const signature = JSON.stringify(data.pools.map(pool => { const view = poolView(data, pool); return [view.fresh, view.graceValid, view.reason, view.windows.fiveHour.valid, view.windows.week.valid]; }));
   if (signature !== availabilitySignature) { renderAvailability(); if(viewerRole === 'admin') renderMother(); }
   if (!$('#activity').hidden) renderEvents();
 }, 5000);
-document.addEventListener('visibilitychange', () => { if (data && !document.hidden) { renderAvailability(); refresh(true).catch(error => toast(error.message)); } });
+document.addEventListener('visibilitychange', () => { if (data && !document.hidden) { renderAvailability(); refresh().catch(error => toast(error.message)); } });
 async function initialize() {
   const loginFailed=new URLSearchParams(location.search).has('login_error');
   if(loginFailed){history.replaceState(null,'',location.pathname);$('#google-login-error').textContent='Google 登录未完成，请重新登录并选择母账号或已绑定的成员邮箱。';}
@@ -543,7 +585,8 @@ async function initialize() {
   document.body.dataset.auth = 'guest';
   $('#login-dialog').showModal();
 }
-$('#tutorial-command').textContent=installCommand();
+document.querySelectorAll('[data-install-os]').forEach(select=>{select.onchange=renderInstallCommands;});
+renderInstallCommands();
 $('#installation-prompt').textContent=installationPrompt();
 $('#installation-token').addEventListener('input',()=>{$('#installation-token').setCustomValidity('');clearPromptFallbacks();});
 $('#copy-install-prompt').onclick=()=>copyInstallationPrompt($('#installation-token'),$('#install-prompt-fallback'));

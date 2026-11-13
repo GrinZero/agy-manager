@@ -7,6 +7,7 @@ import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {createHash} from 'node:crypto';
 import {envelope,validateUrl,readTelemetry,readContextTelemetry,send,selfUpdate} from '../public/client/agy-quota.mjs';
+import {hookPlan} from '../public/client/install.mjs';
 
 const token='agy_'+'a'.repeat(64), runtime=resolve('public/client/agy-quota.mjs'),installer=resolve('public/client/install.mjs');
 function run(file,args,stdin='',env={}) {return new Promise((resolve,reject)=>{const p=spawn(process.execPath,[file,...args],{env:{...process.env,...env}});let stdout='',stderr='';p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.on('error',reject);p.on('exit',code=>resolve({code,stdout,stderr}));p.stdin.end(stdin);});}
@@ -18,6 +19,53 @@ test('client strips private data and requires secure remote URL',()=>{
   assert.deepEqual(envelope({...payload,initialNumSteps:18,invocationNum:2},'check'),{conversationId:'c-1',invocationNum:180002,modelName:'gemini-flash'});
   assert.throws(()=>validateUrl('http://example.com'));assert.throws(()=>validateUrl('https://evil:password@example.com'));
   assert.equal(validateUrl('https://example.com'),'https://example.com');
+});
+test('Windows hook command is cmd /c safe and never embeds the user path',()=>{
+  const guardDir='C:\\Users\\Some One\\.gemini\\config\\agy-family-quota';
+  const plan=hookPlan('win32','C:\\Program Files\\nodejs\\node.exe',guardDir+'\\agy-quota.mjs',guardDir);
+  assert.equal(plan.command,'agy-family-quota\\run.cmd');
+  assert.ok(!plan.command.includes('"'),'cmd /c strips the first quote of a quoted executable');
+  assert.ok(!plan.command.includes(' '),'no spaces may appear in the hook command line');
+  assert.equal(plan.launchers.length,1);
+  const content=plan.launchers[0].content;
+  assert.match(content,/^@echo off\r\n/);
+  assert.ok(content.includes('set "AGY_NODE=C:\\Program Files\\nodejs\\node.exe"'));
+  assert.ok(content.includes('set "AGY_NODE=node"'),'must fall back to PATH if node.exe was moved');
+  assert.ok(content.includes('"%~dp0agy-quota.mjs"'),'resolve the script relative to the launcher');
+  assert.ok(!content.includes('Some One'),'user paths with spaces must not appear in a cmd file');
+  assert.ok(content.endsWith(' %*\r\n'));
+});
+test('Windows launcher stays safe when the home path contains cmd metacharacters',()=>{
+  const guardDir='C:\\Users\\A&B%USERNAME%\\.gemini\\config\\agy-family-quota';
+  const plan=hookPlan('win32','C:\\Program Files\\nodejs\\node.exe',guardDir+'\\agy-quota.mjs',guardDir);
+  assert.ok(!plan.launchers[0].content.includes('A&B'));
+  assert.ok(!plan.launchers[0].content.includes('%USERNAME%'));
+  assert.ok(!plan.command.includes(' '));
+});
+test('Unix hook command keeps the original quoted absolute-path form',()=>{
+  const guardDir='/home/me/.gemini/config/agy-family-quota';
+  const plan=hookPlan('linux','/usr/bin/node',guardDir+'/agy-quota.mjs',guardDir);
+  assert.equal(plan.command,"'/usr/bin/node' '/home/me/.gemini/config/agy-family-quota/agy-quota.mjs'");
+  assert.deepEqual(plan.launchers,[]);
+});
+test('generated Windows launcher actually runs the guard under cmd /c',async(t)=>{
+  if(process.platform!=='win32')return t.skip('cmd /c is Windows-only');
+  const home=await mkdtemp(join(tmpdir(),'agy winhook '));
+  const configDir=join(home,'.gemini','config'),guardDir=join(configDir,'agy-family-quota');
+  await mkdir(guardDir,{recursive:true});
+  const scriptPath=join(guardDir,'agy-quota.mjs');
+  await writeFile(scriptPath,await readFile(runtime,'utf8'));
+  const plan=hookPlan('win32',process.execPath,scriptPath,guardDir);
+  await writeFile(plan.launchers[0].path,plan.launchers[0].content);
+  const command=plan.command+' check';
+  const result=await new Promise(resolve=>{
+    const child=spawn(process.env.ComSpec||'C:\\Windows\\System32\\cmd.exe',['/c',command],{cwd:configDir,windowsHide:true});
+    let out='',err='';child.stdout.on('data',c=>out+=c);child.stderr.on('data',c=>err+=c);
+    child.on('close',code=>resolve({code,out,err}));child.stdin.end('{}');
+  });
+  assert.equal(result.code,0,result.err);
+  const emitted=JSON.parse(result.out);
+  assert.equal(emitted.terminationBehavior,'terminate','the guard must actually start and emit JSON');
 });
 test('hook outputs one valid object, forwards terminate and omits private data',async()=>{
   let received;
@@ -121,32 +169,41 @@ test('a response slower than the old 2.5 second deadline is accepted within five
   const s=await server((_req,res)=>{const t=setTimeout(()=>res.end('{}'),3200);res.on('close',()=>clearTimeout(t));});
   try{const root=await config(s.url);const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});assert.equal(r.code,0);assert.deepEqual(JSON.parse(r.stdout),{});}finally{await s.close();}
 });
-test('stalled requests get three five-second attempts before failing closed once',async()=>{
+test('stalled requests share one 16s network budget and fail closed once',async()=>{
   let attempts=0;
-  const s=await server((_req,res)=>{attempts++;const t=setTimeout(()=>res.end('{}'),7000);res.on('close',()=>clearTimeout(t));});
-  try{const root=await config(s.url),start=Date.now();const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});const elapsed=Date.now()-start;assert.equal(attempts,3);assert.ok(elapsed>=15000&&elapsed<17500,`elapsed ${elapsed}ms`);assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');assert.equal(r.code,0);}finally{await s.close();}
+  const s=await server((_req,res)=>{attempts++;const t=setTimeout(()=>res.end('{}'),12000);res.on('close',()=>clearTimeout(t));});
+  try{const root=await config(s.url),start=Date.now();const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});const elapsed=Date.now()-start;
+    assert.ok(attempts>=2&&attempts<=3,`attempts ${attempts}`);
+    assert.ok(elapsed>=15000&&elapsed<17500,`elapsed ${elapsed}ms`);
+    assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');assert.equal(r.code,0);
+  }finally{await s.close();}
 });
-test('slow outbox replay preserves a terminate response and cannot extend the deadline',async()=>{
-  let online=false,checks=0;
+test('slow outbox replay preserves a terminate response and stays inside the hook deadline',async()=>{
+  let online=false,replayed=0;
   const s=await server(async(req,res)=>{for await(const _ of req){}if(!online){res.statusCode=503;res.end('{}');return;}
-    if(req.url==='/check'){
-      if(++checks<3){const t=setTimeout(()=>res.end('{}'),7000);res.on('close',()=>clearTimeout(t));return;}
-      res.end('{"terminationBehavior":"terminate"}');return;
-    }
+    if(req.url==='/check'){res.end('{"terminationBehavior":"terminate"}');return;}
+    replayed++;
     const t=setTimeout(()=>res.end('{}'),650);res.on('close',()=>clearTimeout(t));
   });
   try{const root=await config(s.url);for(let n=0;n<12;n++)await run(runtime,['commit'],JSON.stringify({...payload,invocationNum:n}),{AGY_QUOTA_CONFIG_DIR:root});
-    online=true;const start=Date.now();const r=await run(runtime,['check'],JSON.stringify({...payload,invocationNum:9}),{AGY_QUOTA_CONFIG_DIR:root});
-    const elapsed=Date.now()-start;assert.ok(elapsed>=16000&&elapsed<17500,`elapsed ${elapsed}ms`);assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');assert.ok((await readdir(join(root,'pending'))).length>0);
+    assert.equal((await readdir(join(root,'pending'))).length,12,'offline completions must be durable');
+    online=true;replayed=0;
+    const start=Date.now();const r=await run(runtime,['check'],JSON.stringify({...payload,invocationNum:9}),{AGY_QUOTA_CONFIG_DIR:root});
+    const elapsed=Date.now()-start;assert.ok(elapsed<16500,`elapsed ${elapsed}ms`);
+    assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');
+    assert.equal(replayed,10,'replay is bounded to 10 records per hook');
+    assert.equal((await readdir(join(root,'pending'))).length,2,'unreplayed records stay on disk');
   }finally{await s.close();}
 });
 test('installer preserves other hooks/settings, protects credentials, and uninstalls cleanly',async()=>{
   const home=await mkdtemp(join(tmpdir(),'agy install '));const root=join(home,'.gemini','config'),cli=join(home,'.gemini','antigravity-cli');await mkdir(root,{recursive:true});await mkdir(cli,{recursive:true});await writeFile(join(root,'hooks.json'),JSON.stringify({existing:{enabled:true}}));await writeFile(join(cli,'settings.json'),JSON.stringify({theme:'dark',useG1Credits:true}));const tokenFile=join(home,'token');await writeFile(tokenFile,token);
   const r=await run(installer,['--home',home,'--url','https://example.com','--token-file',tokenFile]);assert.equal(r.code,0,r.stderr);
   const hooks=JSON.parse(await readFile(join(root,'hooks.json'),'utf8')),settings=JSON.parse(await readFile(join(cli,'settings.json'),'utf8'));
-  assert.deepEqual(hooks.existing,{enabled:true});assert.equal(settings.theme,'dark');assert.equal(settings.useG1Credits,false);assert.equal(hooks['family-quota-guard'].Stop.length,1);assert.ok(hooks['family-quota-guard'].PreInvocation[0].command.includes("'"));
+  assert.deepEqual(hooks.existing,{enabled:true});assert.equal(settings.theme,'dark');assert.equal(settings.useG1Credits,false);assert.equal(hooks['family-quota-guard'].Stop.length,1);
+  if(process.platform==='win32')assert.equal(hooks['family-quota-guard'].PreInvocation[0].command,'agy-family-quota\\run.cmd check');
+  else assert.ok(hooks['family-quota-guard'].PreInvocation[0].command.includes("'"));
   for(const event of ['PreInvocation','PostInvocation','Stop'])assert.equal(hooks['family-quota-guard'][event][0].timeout,18);
-  assert.equal((await stat(join(root,'agy-family-quota','credentials.json'))).mode&0o777,0o600);
+  if(process.platform!=='win32')assert.equal((await stat(join(root,'agy-family-quota','credentials.json'))).mode&0o777,0o600);
   assert.ok((await readdir(root)).some(x=>x.startsWith('hooks.json.backup-')));
   const upgrade=await run(installer,['--home',home,'--upgrade']);assert.equal(upgrade.code,0,upgrade.stderr);
   assert.equal(JSON.parse(await readFile(join(root,'agy-family-quota','credentials.json'),'utf8')).token,token);
@@ -249,7 +306,7 @@ test('hook silently self-updates after emitting response when server advertises 
     assert.deepEqual(JSON.parse(r1.stdout),{});
     assert.equal(downloads,1);
     assert.equal(await readFile(localScriptPath,'utf8'),updatedScript);
-    assert.equal((await stat(localScriptPath)).mode&0o777,0o700);
+    if(process.platform!=='win32')assert.equal((await stat(localScriptPath)).mode&0o777,0o700);
     // 2. Does not re-download when local script already matches advertised hash
     const r2=await run(localScriptPath,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});
     assert.equal(r2.code,0);
