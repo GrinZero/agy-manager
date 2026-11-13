@@ -98,6 +98,8 @@ node public/client/install.mjs --url https://YOUR-WORKER.workers.dev
 
 安装器会提示粘贴成员令牌，输入隐藏。无人值守安装用 `--token-file /absolute/path/to/token`，不要把令牌放进命令行或 URL。
 
+管理页 `/#manual` 是面向成员的「守门员使用手册」，按成员电脑的系统生成安装、更新、带代理更新、取消代理和 `/health` 测速五条命令，并附参数速查与常见问题。改动 UI 时注意 `tests/manual.test.mjs` 会校验手册页的 id 连线与命令写法。
+
 如果这台电脑的 Node 无法稳定直连配额服务（例如 TLS 握手反复超时），可在安装命令追加 `--proxy http://127.0.0.1:7897`。代理只用于配额门禁进程，不修改系统代理；支持无认证的 HTTP 代理，也支持 `http://user:pass@host:port` 形式。配置写入 `~/.gemini/config/agy-family-quota/credentials.json` 的 `proxy` 字段，目标为 localhost / 127.0.0.1 时自动绕过代理。`--upgrade` 会保留原代理，`--upgrade --no-proxy` 可移除。管理页「安装 / 更新」的安装弹窗也提供可选代理输入，只用于生成命令并保存在当前浏览器，不会上传服务器。
 
 从本地仓库安装时示例：

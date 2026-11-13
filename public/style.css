@@ -181,3 +181,59 @@ body[data-auth=loading] .loading-splash{display:grid;place-items:center;min-heig
 .empty-steps{display:inline-block;text-align:left;margin:18px auto 4px;padding-left:22px;max-width:560px;line-height:1.9;color:var(--muted)}
 .empty-steps li::marker{color:var(--green);font-weight:600}
 .empty .subtle-link{display:inline-block;margin-top:12px}
+
+/* Usage manual: the reference page for guard CLI flags (--upgrade / --proxy / --uninstall). */
+.manual-page{max-width:880px;margin:auto}
+.manual-block{padding:28px 0;border-bottom:1px solid var(--line)}
+.manual-block:first-of-type{padding-top:0}
+.manual-block:last-of-type{border-bottom:0;padding-bottom:0}
+.manual-block h2{font-size:21px;line-height:1.45}
+.manual-lead{font-size:14px;color:var(--muted);margin-top:8px;line-height:1.85}
+.manual-page p{font-size:14px;color:var(--muted);line-height:1.85;margin-top:10px}
+.manual-controls{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:center;margin:16px 0 4px}
+.manual-controls .install-os-label{margin:0}
+.manual-page code{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--sage);color:var(--green);border-radius:5px;padding:1px 5px;overflow-wrap:anywhere}
+.manual-command{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-top:16px}
+.manual-command-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.manual-command-heading h3{font-size:15px}
+.manual-tag{font-size:11px;color:var(--green);background:var(--sage);border-radius:99px;padding:2px 9px;white-space:nowrap}
+.manual-command-copy{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.75}
+.manual-page .manual-command pre{margin:12px 0;background:#f1f4ee;font-size:12px}
+.manual-command button{font-size:13px}
+.manual-table-wrap{overflow-x:auto;margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.manual-table{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+.manual-table th,.manual-table td{text-align:left;padding:12px 16px;vertical-align:top;border-bottom:1px solid var(--line);line-height:1.7}
+.manual-table thead th{font-size:12px;font-weight:600;color:var(--muted);background:var(--sage);white-space:nowrap}
+.manual-table tbody tr:last-child td{border-bottom:0}
+.manual-table td:nth-child(2){color:var(--muted)}
+@media(min-width:701px){.manual-table th:first-child,.manual-table td:first-child{white-space:nowrap;width:1%}}
+.manual-steps{margin:14px 0 0;padding-left:22px;color:var(--muted);font-size:14px;line-height:1.9}
+.manual-steps li::marker{color:var(--green);font-weight:600}
+.manual-faq{margin:14px 0 0}
+.manual-faq dt{font-size:14px;font-weight:650;margin-top:18px}
+.manual-faq dt:first-child{margin-top:0}
+.manual-faq dd{margin:6px 0 0;font-size:13px;color:var(--muted);line-height:1.8}
+.manual-source{margin-top:20px}
+.manual-link-inline{display:inline-block;margin-left:16px}
+@media(max-width:700px){
+  .manual-block{padding:22px 0}
+  .manual-block h2{font-size:18px}
+  .manual-page p,.manual-lead,.manual-steps{font-size:13px}
+  .manual-command{padding:14px 14px 16px}
+  /* Stacked controls: the label text plus a flexing input cannot share 360px. */
+  .manual-controls{display:block}
+  .manual-controls .install-os-label{display:block;margin:12px 0 0}
+  .manual-controls .install-os-label select,
+  .manual-controls .install-proxy-label input{width:100%;margin-top:6px}
+  /* A three-column parameter table cannot fit 360px; stack each row instead of scrolling. */
+  .manual-table-wrap{overflow:visible;border:0;background:transparent;border-radius:0}
+  .manual-table{min-width:0;font-size:13px}
+  .manual-table thead{display:none}
+  .manual-table tbody tr{display:block;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
+  .manual-table td{display:block;border:0;padding:0;line-height:1.75}
+  .manual-table td:first-child{margin-bottom:2px}
+  .manual-table td:nth-child(2){color:var(--muted)}
+  .manual-table td:nth-child(3){color:var(--muted);font-size:12px;margin-top:6px}
+  .manual-table td:nth-child(3)::before{content:"什么时候用：";color:var(--ink);font-weight:600}
+  .manual-link-inline{display:block;margin-left:0}
+}

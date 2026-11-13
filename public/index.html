@@ -9,7 +9,7 @@
   <a class="skip-link" href="#main">跳到内容</a>
   <header class="site-header"><div class="header-inner">
     <a class="brand" href="#overview" aria-label="AGY 家庭配额首页"><span class="wordmark">agy</span><span>家庭配额</span></a>
-    <nav class="main-nav" aria-label="主要导航"><a href="#overview" aria-current="page">额度</a><a href="#members" id="members-nav">成员</a><a href="#activity">记录</a><a href="#tutorial">教程</a><a href="#settings" class="mobile-settings" data-admin-only>设置</a></nav>
+    <nav class="main-nav" aria-label="主要导航"><a href="#overview" aria-current="page">额度</a><a href="#members" id="members-nav">成员</a><a href="#activity">记录</a><a href="#tutorial">教程</a><a href="#manual">手册</a><a href="#settings" class="mobile-settings" data-admin-only>设置</a></nav>
     <div class="header-actions"><a href="#settings" id="settings-top" data-admin-only>设置</a><details class="account-menu"><summary aria-label="账号菜单"><span id="account-initial" class="avatar small-avatar">家</span></summary><div class="account-popover"><span id="account-label">家庭账号</span><button id="logout" class="text-button">退出登录</button></div></details></div>
   </div></header>
   <main id="main" tabindex="-1">
@@ -45,7 +45,7 @@
         </div>
         <div id="settings-advanced" role="tabpanel" aria-labelledby="tab-advanced" hidden>
           <section class="setting-section"><h2>进行中调用的预留</h2><p>调用开始时先冻结预估百分比，完成后按实际 Token 多退少补。未完成的预留到期自动释放。</p><label class="inline-number">预留有效期 <span><input type="number" name="reservation_seconds" min="30" max="3600" required> 秒</span></label><p class="hint">可设置 30–3600 秒，长时间调用可以适当调高。</p></section>
-          <section class="setting-section"><h2>使用须知</h2><p>本地守门员适用于互信成员。修改或移除本地 Hook 可以绕过限制。</p><p>所有成员与家庭账本均统一以百分比（%）计量并与母账号对账。</p></section>
+          <section class="setting-section"><h2>使用须知</h2><p>本地守门员适用于互信成员。修改或移除本地 Hook 可以绕过限制。</p><p>所有成员与家庭账本均统一以百分比（%）计量并与母账号对账。</p><a class="subtle-link" href="#manual">查看守门员使用手册：更新、代理、卸载 →</a></section>
         </div>
         <div class="settings-save"><p class="form-error" role="alert"></p><span id="save-status" class="hint">设置已同步</span><button id="reset-policy" type="button" class="quiet">还原修改</button><button class="primary" type="submit">保存配额设置</button></div>
       </form>
@@ -74,10 +74,110 @@
         <textarea id="install-prompt-fallback" class="prompt-fallback" readonly rows="10" aria-label="完整安装提示词，含成员令牌" hidden></textarea>
         <details class="plain-details prompt-preview"><summary>看看 AI 会做什么</summary><pre id="installation-prompt" aria-label="安装提示词预览，不含成员令牌"></pre></details>
         <div class="tutorial-check"><h3>安装好后，确认已经开始记账</h3><p>用自己的 Google 账号重新打开 Antigravity，发起一次模型调用，再回到「记录」查看新记录。AI 的配置检查完成后，还需要这次实际调用来确认。</p></div>
-        <details class="plain-details manual-install"><summary>需要自己安装？查看终端命令</summary><p>macOS / Linux 需 Node.js 20+，运行后按提示粘贴成员令牌。</p><pre id="tutorial-command" aria-label="门禁安装命令"></pre><button id="copy-tutorial-install" class="outline">复制安装命令</button><p>桌面端 / IDE 中将 AI Credit Overages 设为 Never；CLI 的超额点数由安装器关闭。</p></details>
+        <details class="plain-details manual-install"><summary>需要自己安装？查看终端命令</summary><p>macOS / Linux 需 Node.js 20+，运行后按提示粘贴成员令牌。</p><pre id="tutorial-command" aria-label="门禁安装命令"></pre><button id="copy-tutorial-install" class="outline">复制安装命令</button><p>桌面端 / IDE 中将 AI Credit Overages 设为 Never；CLI 的超额点数由安装器关闭。</p><a class="subtle-link" href="#manual">需要更新、改代理或卸载？查看使用手册 →</a></details>
       </section>
       <details class="plain-details tutorial-faq"><summary>登录或安装遇到问题？</summary><p>无法登录：请确认选择的邮箱与绑定邮箱完全一致，成员未被暂停或删除；还没绑定时，请让管理员编辑成员补上邮箱。</p><p>提示令牌无效：确认使用的是自己的最新令牌；重置后旧令牌会失效，需要重新安装。</p><p>没有使用记录：确认安装完成后已重启客户端，并完成过一次模型调用。Google 家庭组和本系统不会自动互相同步成员。</p></details>
       <p class="hint tutorial-source">家庭人数说明：<a href="https://support.google.com/families/answer/6317858?hl=zh-Hans" target="_blank" rel="noopener noreferrer">Google 家庭组帮助 ↗</a>。各账号可用权益以 Google 页面显示为准。</p>
+    </section>
+    <section id="manual" class="page manual-page" aria-labelledby="manual-title" hidden>
+      <div class="page-heading"><div><h1 id="manual-title" tabindex="-1">守门员使用手册</h1><p>安装、更新、代理、卸载，常用操作都在这一页。</p></div><span class="quiet-label">命令速查</span></div>
+
+      <section class="manual-block" aria-labelledby="manual-generate-title">
+        <h2 id="manual-generate-title">先生成命令</h2>
+        <p class="manual-lead">选好要安装的那台电脑的系统，下面三段命令会跟着变。代理留空表示直连。</p>
+        <div class="manual-controls">
+          <label class="install-os-label">成员电脑的系统 <select data-install-os aria-label="成员电脑的系统"><option value="posix">macOS / Linux</option><option value="windows">Windows</option></select></label>
+          <label class="install-os-label install-proxy-label">这台电脑的配额服务代理（可选）<input data-install-proxy type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7897" aria-describedby="manual-proxy-hint"></label>
+        </div>
+        <p class="hint" id="manual-proxy-hint">只填 HTTP 代理的 origin，例如 http://127.0.0.1:7897。代理只影响配额检查，不会改系统代理；localhost 与 127.0.0.1 自动绕过。</p>
+
+        <div class="manual-command">
+          <div class="manual-command-heading"><h3>首次安装</h3><span class="manual-tag">新电脑</span></div>
+          <p class="manual-command-copy">第一次装、或者换了电脑时用。运行后按提示粘贴成员令牌（输入隐藏）。</p>
+          <pre id="manual-install"></pre>
+          <button class="quiet" data-copy-command="manual-install">复制安装命令</button>
+        </div>
+
+        <div class="manual-command">
+          <div class="manual-command-heading"><h3>更新脚本</h3><span class="manual-tag">保留令牌</span></div>
+          <p class="manual-command-copy">已经装过、只想换成最新版时用。自动复用本机保存的地址、令牌和代理，不需要重新粘贴令牌。</p>
+          <pre id="manual-upgrade"></pre>
+          <button class="quiet" data-copy-command="manual-upgrade">复制更新命令</button>
+        </div>
+
+        <div class="manual-command">
+          <div class="manual-command-heading"><h3>更新并改走代理</h3><span class="manual-tag">首字变慢时</span></div>
+          <p class="manual-command-copy">在上面代理框填好地址后，复制的就是下面这条：在更新命令后追加 <code>--proxy</code>。</p>
+          <pre id="manual-proxy"></pre>
+          <button class="quiet" data-copy-command="manual-proxy">复制带代理的更新命令</button>
+        </div>
+
+        <div class="manual-command">
+          <div class="manual-command-heading"><h3>取消代理</h3><span class="manual-tag">回到直连</span></div>
+          <p class="manual-command-copy">代理不通、或不想再走代理时用。会清掉本机凭据里保存的代理地址，其余配置不变。</p>
+          <pre id="manual-no-proxy"></pre>
+          <button class="quiet" data-copy-command="manual-no-proxy">复制取消代理命令</button>
+        </div>
+      </section>
+
+      <section class="manual-block" aria-labelledby="manual-params-title">
+        <h2 id="manual-params-title">参数速查</h2>
+        <div class="manual-table-wrap">
+          <table class="manual-table">
+            <caption class="sr-only">安装器参数说明</caption>
+            <thead><tr><th scope="col">参数</th><th scope="col">作用</th><th scope="col">什么时候用</th></tr></thead>
+            <tbody>
+              <tr><td><code>--url</code></td><td>本站地址，例如 <code>https://你的域名</code></td><td>首次安装必填；配合 <code>--upgrade</code> 可省略，沿用已保存的地址</td></tr>
+              <tr><td><code>--token-file</code></td><td>从文件读取成员令牌</td><td>交给 AI 或脚本无人值守安装，避免令牌留在命令历史和日志里</td></tr>
+              <tr><td><code>--upgrade</code></td><td>更新脚本与 Hooks，复用已保存的令牌</td><td>版本升级、修线路、改代理</td></tr>
+              <tr><td><code>--proxy</code></td><td>让配额检查走 HTTP 代理</td><td>首字明显变慢、Hook 卡在 TLS 握手时</td></tr>
+              <tr><td><code>--no-proxy</code></td><td>清除已保存的代理，恢复直连</td><td>代理失效、或本机不再需要代理</td></tr>
+              <tr><td><code>--uninstall</code></td><td>从 <code>hooks.json</code> 移除门禁，并删除 Windows 启动器</td><td>换成员令牌、停用门禁。备份与待补记流水会保留</td></tr>
+              <tr><td><code>--home</code></td><td>安装到另一个用户主目录</td><td>只在测试或验证本机多份安装时用；Antigravity 实际读取的是默认主目录</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">安装器没有 <code>--token</code> 参数：令牌不要写进命令行。交互模式下会隐藏输入；非交互场景请用 <code>--token-file</code>。</p>
+        <p class="hint">参数可以组合，顺序不限。例如：<code>--url https://… --upgrade --proxy http://127.0.0.1:7897</code>。代理只接受 <code>http://</code> 开头的 origin，不能带路径或参数。</p>
+      </section>
+
+      <section class="manual-block" aria-labelledby="manual-verify-title">
+        <h2 id="manual-verify-title">装完怎么确认</h2>
+        <ol class="manual-steps">
+          <li>安装器最后出现「Hook 自检通过」。它说明三个 Hook 在真实 shell 里能启动。</li>
+          <li>完全退出并重启 Antigravity，再发起一次模型调用。</li>
+          <li>回到「记录」刷新，能看到这次调用即算成功。</li>
+        </ol>
+        <p class="hint">只有自检通过还不够：自检不发网络请求、不写流水，必须以一次真实调用为准。</p>
+      </section>
+
+      <section class="manual-block" aria-labelledby="manual-slow-title">
+        <h2 id="manual-slow-title">首字十几秒？先测这一段</h2>
+        <p class="manual-lead">门禁在每次调用前同步检查一次配额。这一步卡住时，等待会出现在首字之前。典型症状是到配额服务的 TLS 握手被中断，约 5 秒一次、重试 3 次，合计约 16 秒。</p>
+        <p>先在本机终端测一次连通性，正常应在 1–3 秒返回：</p>
+        <pre id="manual-health"></pre>
+        <button class="quiet" data-copy-command="manual-health">复制测速命令</button>
+        <p class="hint">结尾那串就是状态码和耗时：正常输出类似 <code>HTTP 200 1.2s</code>（Windows 是 <code>HTTP:200:1.2s</code>）。</p>
+        <ol class="manual-steps">
+          <li>返回很快：延迟不在门禁，去看模型线路本身。</li>
+          <li>超时或明显偏慢，而你有可用的 HTTP 代理：在上面代理框填地址，再执行「更新并改走代理」。</li>
+          <li>改完再发一次调用；仍超过 10 秒，把命令输出和耗时发给管理员。</li>
+        </ol>
+        <p class="hint">这条命令只访问 <code>/health</code>，不带令牌、不查额度、不写流水。</p>
+      </section>
+
+      <section class="manual-block" aria-labelledby="manual-faq-title">
+        <h2 id="manual-faq-title">常见问题</h2>
+        <dl class="manual-faq">
+          <dt>重置了令牌，旧电脑还能用吗？</dt><dd>不能。重置后旧令牌立即失效，需要在每台电脑上用新令牌重新运行一次「首次安装」命令；同一台电脑重复安装等于覆盖更新。</dd>
+          <dt>更新会覆盖我的其他 Hooks 吗？</dt><dd>不会。安装器只改写 <code>family-quota-guard</code> 这一项，其他 Hooks 与 CLI 设置保留，改动前会备份成 <code>.backup-时间戳</code> 文件。</dd>
+          <dt>一台电脑两个人都要用怎么办？</dt><dd>不建议。每台电脑只应装一份门禁，记录会算在令牌对应的成员名下。切换使用者请用 <code>--uninstall</code> 后换令牌重装。</dd>
+          <dt>卸载后还会产生记录吗？</dt><dd>不会。卸载只移除 <code>hooks.json</code> 里的门禁项，之后不再有上报；备份、<code>pending/</code> 待补记流水和超额点数关闭设置都会保留。</dd>
+          <dt>Windows 需要额外做什么？</dt><dd>不需要。安装器会生成 <code>run.cmd</code> 启动器并用相对路径注册 Hook，避免 <code>cmd</code> 解析带空格的绝对路径失败。旧版 Windows 安装必须重新运行一次安装器。</dd>
+        </dl>
+      </section>
+
+      <p class="hint manual-source">需要一步步的安装流程？看 <a class="subtle-link" href="#tutorial">教程</a>；成员令牌在「成员」页生成。</p>
     </section>
   </main>
   <div id="loading-splash" class="loading-splash" aria-live="polite">
@@ -123,9 +223,9 @@
       <div class="confirm-actions"><button id="confirm-cancel" class="quiet" type="button" autofocus>取消</button><button id="confirm-submit" class="primary danger-button" type="submit"></button></div>
     </form>
   </dialog>
-  <dialog id="token-dialog" aria-label="成员令牌与安装"><div class="dialog-title"><h2>安装门禁</h2><button class="close" data-close="token-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">此令牌仅显示一次，请复制后妥善保存。重置会让旧令牌立即失效。</p><label>成员令牌<textarea id="generated-token" readonly rows="3" spellcheck="false"></textarea></label><button class="primary full" id="copy-token-prompt">复制安装提示词给我的 AI</button><p class="hint">提示词包含此令牌和本站地址。发给这台电脑上的 AI 助手，让它执行安装并检查配置。</p><textarea id="token-prompt-fallback" class="prompt-fallback" readonly rows="10" aria-label="完整安装提示词，含成员令牌" hidden></textarea><button class="quiet full" id="copy-token">只复制令牌</button><label class="install-os-label install-proxy-label">这台电脑的配额服务代理（可选）<input data-install-proxy type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7897" aria-describedby="install-proxy-hint"></label><p class="hint" id="install-proxy-hint">留空则直连。只填 HTTP 代理 origin，例如 http://127.0.0.1:7897；仅保存在当前浏览器，并写入本机凭据文件。</p><details class="plain-details"><summary>自己在终端安装</summary><h3>在成员电脑安装</h3><p class="dialog-copy">电脑需安装 Node.js 20+。在任意可写目录执行下面两条命令（macOS / Linux 终端、Windows cmd 或 PowerShell 均可用），按提示粘贴上面的成员令牌。</p><label class="install-os-label">成员电脑的系统 <select data-install-os aria-label="成员电脑的系统"><option value="posix">macOS / Linux</option><option value="windows">Windows</option></select></label><pre id="install-command"></pre><p class="hint">请选择实际要安装门禁的那台电脑的系统，不一定是当前浏览器的系统。Windows 命令请在任意可写目录执行。</p><button class="quiet full" id="copy-install">复制安装命令</button></details><a class="subtle-link" href="#tutorial" id="token-tutorial">查看完整安装教程 →</a><p class="hint">安装器会合并已有 Hooks、备份配置并关闭 CLI 超额点数。桌面端和 IDE 的 AI Credit Overages 请手动设为 Never。</p></dialog>
+  <dialog id="token-dialog" aria-label="成员令牌与安装"><div class="dialog-title"><h2>安装门禁</h2><button class="close" data-close="token-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">此令牌仅显示一次，请复制后妥善保存。重置会让旧令牌立即失效。</p><label>成员令牌<textarea id="generated-token" readonly rows="3" spellcheck="false"></textarea></label><button class="primary full" id="copy-token-prompt">复制安装提示词给我的 AI</button><p class="hint">提示词包含此令牌和本站地址。发给这台电脑上的 AI 助手，让它执行安装并检查配置。</p><textarea id="token-prompt-fallback" class="prompt-fallback" readonly rows="10" aria-label="完整安装提示词，含成员令牌" hidden></textarea><button class="quiet full" id="copy-token">只复制令牌</button><label class="install-os-label install-proxy-label">这台电脑的配额服务代理（可选）<input data-install-proxy type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7897" aria-describedby="install-proxy-hint"></label><p class="hint" id="install-proxy-hint">留空则直连。只填 HTTP 代理 origin，例如 http://127.0.0.1:7897；仅保存在当前浏览器，并写入本机凭据文件。</p><details class="plain-details"><summary>自己在终端安装</summary><h3>在成员电脑安装</h3><p class="dialog-copy">电脑需安装 Node.js 20+。在任意可写目录执行下面两条命令（macOS / Linux 终端、Windows cmd 或 PowerShell 均可用），按提示粘贴上面的成员令牌。</p><label class="install-os-label">成员电脑的系统 <select data-install-os aria-label="成员电脑的系统"><option value="posix">macOS / Linux</option><option value="windows">Windows</option></select></label><pre id="install-command"></pre><p class="hint">请选择实际要安装门禁的那台电脑的系统，不一定是当前浏览器的系统。Windows 命令请在任意可写目录执行。</p><button class="quiet full" id="copy-install">复制安装命令</button></details><a class="subtle-link" href="#tutorial" id="token-tutorial">查看完整安装教程 →</a><a class="subtle-link manual-link-inline" href="#manual" data-close="token-dialog">使用手册 · 更新 / 代理 / 卸载 →</a><p class="hint">安装器会合并已有 Hooks、备份配置并关闭 CLI 超额点数。桌面端和 IDE 的 AI Credit Overages 请手动设为 Never。</p></dialog>
   <dialog id="mother-dialog" aria-labelledby="oauth-title"><form id="mother-form"><div class="dialog-title"><h2 id="oauth-title">登录 Google 账号</h2><button class="close" type="button" data-close="mother-dialog" aria-label="关闭">×</button></div><p id="oauth-description" class="dialog-copy">在 Google 页面选择母账号或管理员已绑定的成员邮箱，完成授权后回到这里。成员登录不会替换母账号。</p><a id="google-auth-link" class="auth-link" target="_blank" rel="noopener noreferrer">打开 Google 登录</a><p class="hint" id="oauth-hint">授权后浏览器会跳转到 localhost，页面无法打开是正常现象。复制地址栏里的完整地址，粘贴到下方完成连接。</p><label>授权后的完整地址<textarea id="callback-url" rows="4" required autocomplete="off" spellcheck="false" placeholder="http://localhost:50987/oauth-callback?state=…&amp;code=…"></textarea></label><p class="form-error" role="alert"></p><button class="primary full">完成登录</button></form></dialog>
-  <dialog id="upgrade-dialog" aria-label="更新本地守门员"><div class="dialog-title"><h2>更新本地守门员</h2><button class="close" data-close="upgrade-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">新版守门员已内置静默自动更新（每次模型调用后自动校验并原子更新本地脚本）。首次升级到支持自动更新的版本，或需要手动立即更新时，运行下方命令即可（自动复用原成员令牌）：</p><label class="install-os-label">成员电脑的系统 <select data-install-os aria-label="成员电脑的系统"><option value="posix">macOS / Linux</option><option value="windows">Windows</option></select></label><label class="install-os-label install-proxy-label">本机代理（可选）<input data-install-proxy type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7897" aria-describedby="upgrade-proxy-hint"></label><p class="hint" id="upgrade-proxy-hint">留空则沿用本机已有配置；首次填写会写入本机凭据文件。</p><pre id="upgrade-command"></pre><p class="hint">请选择实际运行守门员的那台电脑的系统。旧版 Windows 安装请重新运行一次，安装器会自检 Hook 是否真的能启动。</p><button id="copy-upgrade" class="outline full">复制更新命令</button><p class="hint">首次安装请先添加成员，使用该成员的安装命令。支持自动更新后，后续脚本迭代无需再次手动执行。</p></dialog>
+  <dialog id="upgrade-dialog" aria-label="更新本地守门员"><div class="dialog-title"><h2>更新本地守门员</h2><button class="close" data-close="upgrade-dialog" aria-label="关闭">×</button></div><p class="dialog-copy">新版守门员已内置静默自动更新（每次模型调用后自动校验并原子更新本地脚本）。首次升级到支持自动更新的版本，或需要手动立即更新时，运行下方命令即可（自动复用原成员令牌）：</p><label class="install-os-label">成员电脑的系统 <select data-install-os aria-label="成员电脑的系统"><option value="posix">macOS / Linux</option><option value="windows">Windows</option></select></label><label class="install-os-label install-proxy-label">本机代理（可选）<input data-install-proxy type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:7897" aria-describedby="upgrade-proxy-hint"></label><p class="hint" id="upgrade-proxy-hint">留空则沿用本机已有配置；首次填写会写入本机凭据文件。</p><pre id="upgrade-command"></pre><p class="hint">请选择实际运行守门员的那台电脑的系统。旧版 Windows 安装请重新运行一次，安装器会自检 Hook 是否真的能启动。</p><button id="copy-upgrade" class="outline full">复制更新命令</button><a class="subtle-link" href="#manual" data-close="upgrade-dialog">查看使用手册与参数说明 →</a><p class="hint">首次安装请先添加成员，使用该成员的安装命令。支持自动更新后，后续脚本迭代无需再次手动执行。</p></dialog>
   <footer class="public-links"><a href="/about.html">关于 AGY</a><a href="/privacy.html">隐私政策</a><a href="/terms.html">使用条款</a></footer>
   <div id="toast" role="status" hidden></div>
 </body></html>

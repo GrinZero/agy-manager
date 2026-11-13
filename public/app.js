@@ -343,7 +343,7 @@ function settingsTab(tab, focus = false) {
 }
 function route(focus = true) {
   const [candidate, tab] = location.hash.slice(1).split('/');
-  const requested = ['overview', 'members', 'activity', 'settings', 'tutorial'].includes(candidate) ? candidate : 'overview';
+  const requested = ['overview', 'members', 'activity', 'settings', 'tutorial', 'manual'].includes(candidate) ? candidate : 'overview';
   const page = requested === 'settings' && viewerRole === 'member' ? 'tutorial' : requested;
   document.querySelectorAll('main>.page').forEach(section => section.hidden = section.id !== page);
   document.querySelectorAll('.main-nav a, #settings-top').forEach(link => {
@@ -427,9 +427,21 @@ function installCommand(os = currentInstallOS(), extra = '') {
   const q = win ? bare : quote;
   const file = win ? 'agy-quota-install.mjs' : '/tmp/agy-quota-install.mjs';
   const curl = win ? 'curl.exe' : 'curl';
-  const proxy = installProxy();
+  // `--no-proxy` already clears the saved proxy; appending --proxy as well would emit a
+  // contradictory command (the installer would honour --no-proxy, but nobody could tell).
+  const proxy = extra.includes('--no-proxy') ? '' : installProxy();
   return `${curl} -fsS ${q(location.origin + '/client/install.mjs')} -o ${win ? file : quote(file)}\n` +
     `node ${win ? file : quote(file)} --url ${q(location.origin)}${extra ? ' ' + extra : ''}${proxy ? ` --proxy ${q(proxy)}` : ''}`;
+}
+// A copy-paste health probe for the manual. Kept ASCII-only and free of quotes on
+// Windows: `cmd /c` misparses a quoted -w value (and `curl` is an Invoke-WebRequest
+// alias in Windows PowerShell 5.1, so curl.exe is required there).
+function healthCommand(os = currentInstallOS()) {
+  const win = os === 'windows';
+  const origin = location.origin;
+  return win
+    ? `curl.exe -sS -o NUL -w HTTP:%{http_code}:%{time_total}s ${origin}/health`
+    : `curl -sS -o /dev/null -w 'HTTP %{http_code} %{time_total}s\\n' ${origin}/health`;
 }
 function renderInstallCommands() {
   const os = document.querySelector('[data-install-os]')?.value || currentInstallOS();
@@ -438,6 +450,22 @@ function renderInstallCommands() {
   $('#install-command').textContent = value;
   $('#tutorial-command').textContent = value;
   $('#upgrade-command').textContent = installCommand(os, '--upgrade');
+  $('#manual-install').textContent = value;
+  $('#manual-upgrade').textContent = installCommand(os, '--upgrade');
+  $('#manual-no-proxy').textContent = installCommand(os, '--upgrade --no-proxy');
+  $('#manual-health').textContent = healthCommand(os);
+  // Never hand out a proxy command the user did not actually type: if the field is
+  // filled but invalid, say so instead of substituting the documented example.
+  const rawProxy = (document.querySelector('[data-install-proxy]')?.value || '').trim();
+  const proxy = installProxy();
+  const proxyButton = document.querySelector('[data-copy-command="manual-proxy"]');
+  if (rawProxy && !proxy) {
+    $('#manual-proxy').textContent = '代理地址无效：只填 http:// 开头的 origin，例如 http://127.0.0.1:7897';
+    if (proxyButton) proxyButton.disabled = true;
+  } else {
+    $('#manual-proxy').textContent = installCommand(os, `--upgrade${proxy ? '' : ' --proxy http://127.0.0.1:7897'}`);
+    if (proxyButton) proxyButton.disabled = false;
+  }
 }
 function installationPrompt(token = '【复制时会自动填入你的成员令牌】') {
   const proxy = installProxy();
@@ -619,7 +647,11 @@ $('#installation-prompt').textContent=installationPrompt();
 $('#installation-token').addEventListener('input',()=>{$('#installation-token').setCustomValidity('');clearPromptFallbacks();});
 $('#copy-install-prompt').onclick=()=>copyInstallationPrompt($('#installation-token'),$('#install-prompt-fallback'));
 $('#copy-token-prompt').onclick=()=>copyInstallationPrompt($('#generated-token'),$('#token-prompt-fallback'));
-$('#copy-tutorial-install').onclick=()=>navigator.clipboard.writeText(installCommand()).then(()=>toast('安装命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+$('#copy-tutorial-install').onclick=()=>navigator.clipboard.writeText($('#tutorial-command').textContent).then(()=>toast('安装命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+document.querySelectorAll('[data-copy-command]').forEach(button=>{
+  button.onclick=()=>navigator.clipboard.writeText($('#'+button.dataset.copyCommand).textContent)
+    .then(()=>toast('命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+});
 $('#token-tutorial').onclick=()=>$('#token-dialog').close();
 $('#self-install-token').onclick=async()=>{
   let result;
