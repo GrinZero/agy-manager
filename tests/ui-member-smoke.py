@@ -85,7 +85,8 @@ with sync_playwright() as p:
     assert '服务地址：'+origin in prompt and '--token-file' in prompt
     assert '不要只给我一份操作教程' in prompt
     assert '最多重试 2 次' in prompt
-    assert '单次主请求时限必须为 5 秒' in prompt
+    assert '单次主请求时限必须为 10 秒' in prompt
+    assert '所有主请求尝试共用 16 秒网络预算' in prompt
     assert '脚本总时限为 16.5 秒' in prompt and 'timeout 均为 18 秒' in prompt
     page.locator('#token-tutorial').click()
     expect(page.locator('#token-dialog')).not_to_be_visible()

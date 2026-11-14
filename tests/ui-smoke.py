@@ -103,6 +103,7 @@ with sync_playwright() as p:
     # Test-only styles suppress animation/toasts for deterministic screenshots.
     context = browser.new_context(viewport=dict(width=1440,height=900), bypass_csp=True)
     page = context.new_page()
+    page.clock.install()
     errors=[]
     page.on('pageerror',lambda error: errors.append(str(error)))
     def native_dialog(dialog):
@@ -119,6 +120,24 @@ with sync_playwright() as p:
     page.locator('#admin-token').fill('local-browser-fixture-token-'+'x'*32)
     page.locator('#login-form button').click()
     expect(page.locator('#login-dialog')).not_to_be_visible()
+    syncs = sum(path == 'mother/refresh' for _, path, _ in requests)
+    with page.expect_response('**/api/admin/overview'):
+        page.clock.fast_forward(30000)
+    assert sum(path == 'mother/refresh' for _, path, _ in requests) == syncs, 'Automatic polling must only read the saved snapshot'
+    with page.expect_response('**/api/admin/overview'):
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    assert sum(path == 'mother/refresh' for _, path, _ in requests) == syncs, 'Returning to the tab must not trigger an upstream sync'
+    with page.expect_response('**/api/admin/overview'):
+        page.locator('#refresh').click()
+    assert sum(path == 'mother/refresh' for _, path, _ in requests) == syncs + 1, 'Manual refresh must still request a sync'
+    state['mother']['sync_mode'] = 'idle'
+    with page.expect_response('**/api/admin/overview'):
+        page.locator('#refresh').click()
+    expect(page.locator('#connection-status')).to_have_text('空闲中 · 每 5 分钟同步')
+    state['mother']['sync_mode'] = 'active'
+    with page.expect_response('**/api/admin/overview'):
+        page.locator('#refresh').click()
+    expect(page.locator('#connection-status')).not_to_contain_text('空闲中')
     expect(page.locator('.quota-number').first).to_have_text('68%')
     expect(page.locator('.reconciled-points').first).to_contain_text('67.2%')
     expect(page.locator('#quota-breakdown')).not_to_be_visible()

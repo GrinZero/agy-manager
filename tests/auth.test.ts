@@ -1,10 +1,10 @@
 import {test,before,after,beforeEach,afterEach} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import worker from '../src/index';
 import {hashToken} from '../src/security';
 import type {Env} from '../src/types';
+import {applyMigrations} from './helpers/migrations';
 
 let mf:Miniflare,db:D1Database;
 const originalFetch=globalThis.fetch;
@@ -14,10 +14,7 @@ const env=():Env=>({DB:db,ACCOUNT_ENCRYPTION_KEY:'a'.repeat(64),ADMIN_GOOGLE_EMA
 before(async()=>{
   mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'dist/index.js',compatibilityDate:'2026-07-01',d1Databases:['DB']}));
   db=await mf.getD1Database('DB') as unknown as D1Database;
-  for(const name of ['0001_initial.sql','0002_mother_account.sql','0003_admin_google_login.sql','0004_zero_quota_floor.sql','0005_adaptive_quota.sql','0006_member_deletion.sql','0007_initial_quota_usage.sql','0008_member_login.sql','0009_family_connection.sql','0010_remove_family_connection.sql','0011_precision_billing.sql','0012_percentage_quota.sql']) {
-    const schema=await readFile(`migrations/${name}`,'utf8');
-    for(const statement of schema.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(statement).run();
-  }
+  await applyMigrations(db);
 });
 after(async()=>{await mf?.dispose();});
 beforeEach(async()=>{

@@ -1,4 +1,5 @@
 import type {Policy, Pool, QuotaWindow} from './types';
+import {checkpointWrite,evidenceStatement,type EvidenceSnapshot} from './calibration-evidence';
 
 export const FIVE_HOURS = 18_000;
 export const WEEK = 604_800;
@@ -194,15 +195,25 @@ export function upperRateSql(pool: Pool, window: QuotaWindow) {
     THEN COALESCE((SELECT upper_fraction_per_unit FROM quota_calibration WHERE pool_group='${pool}' AND window_name='${window}'),${seed})
     ELSE ${seed} END)`;
 }
+// Separate the two status ranges so SQLite can seek by commit time or expiry.
+// CASE-only aggregates and a pool-only WHERE scan every historical call.
+export function activeUsageSql(pool: Pool, committedAfter: string, now: number) {
+  const fields = 'member_id,weight,status,created_at,committed_at,expires_at,source';
+  return `SELECT ${fields} FROM usage_logs
+    WHERE pool_group='${pool}' AND status='committed' AND committed_at>=${committedAfter}
+    UNION ALL SELECT ${fields} FROM usage_logs
+    WHERE pool_group='${pool}' AND status='reserved' AND expires_at>${Math.floor(now)}`;
+}
 export function budgetStatement(db: D1Database, pool: Pool, now: number) {
+  const at = Math.floor(now);
+  const after = `MAX(COALESCE(b.snapshot_at,0),
+    CASE WHEN c.reset_at IS NOT NULL AND c.reset_at<=${at} AND COALESCE(b.snapshot_at,0)<c.reset_at THEN c.reset_at ELSE 0 END)`;
   return db.prepare(`WITH windows(window_name) AS (VALUES ('fiveHour'),('week'))
     SELECT w.window_name,b.remaining_fraction,b.snapshot_at,b.expires_at,c.*,
     w.window_name AS window_key,
-    COALESCE((SELECT SUM(u.weight) FROM usage_logs u WHERE u.pool_group=? AND
-      (u.status='reserved' AND u.expires_at>? OR u.status='committed' AND u.committed_at>=MAX(COALESCE(b.snapshot_at,0),
-        CASE WHEN c.reset_at IS NOT NULL AND c.reset_at<=? AND COALESCE(b.snapshot_at,0)<c.reset_at THEN c.reset_at ELSE 0 END))),0) AS since_snapshot
+    COALESCE((SELECT SUM(weight) FROM (${activeUsageSql(pool, after, at)})),0) AS since_snapshot
     FROM windows w LEFT JOIN real_quota_budgets b ON b.pool_group=? AND b.window_name=w.window_name
-    LEFT JOIN quota_calibration c ON c.pool_group=? AND c.window_name=w.window_name`).bind(pool, now, now, pool, pool);
+    LEFT JOIN quota_calibration c ON c.pool_group=? AND c.window_name=w.window_name`).bind(pool, pool);
 }
 export type BudgetRow = Partial<CalibrationState> & {
   window_key: QuotaWindow;
@@ -267,22 +278,12 @@ export async function observationWrites(
   if (!observations.length) return [];
   const states = await db.prepare('SELECT * FROM quota_calibration').all<CalibrationState>();
   const oldFor = (b: QuotaObservation) => states.results.find(s => s.pool_group === b.pool && s.window_name === b.window) ?? null;
-  const evidence = await db.batch(observations.map(b => {
-    const old = oldFor(b), anchorAt = old?.anchor_at ?? b.at, prevObsAt = old?.observed_at ?? b.at;
-    return db.prepare(`SELECT
-      COALESCE(SUM(CASE WHEN status='committed' AND source!='offline_commit' AND created_at>=? AND committed_at>=? AND committed_at<=? THEN weight ELSE 0 END),0) AS done,
-      COALESCE(SUM(CASE WHEN status='committed' AND source!='offline_commit' AND created_at<? AND committed_at>=? AND committed_at<=? THEN weight ELSE 0 END),0) AS span,
-      COALESCE(SUM(CASE WHEN status='reserved' AND expires_at>? THEN weight ELSE 0 END),0) AS pending,
-      COALESCE(SUM(CASE WHEN status='committed' AND committed_at>? AND committed_at<=? THEN weight ELSE 0 END),0) AS recent,
-      COALESCE(SUM(CASE WHEN status='committed' AND committed_at>? AND committed_at<=? THEN weight ELSE 0 END),0) AS stepDone,
-      COALESCE(SUM(CASE WHEN source='offline_commit' AND committed_at>=? AND committed_at<=? THEN 1 ELSE 0 END),0) AS recentOffline
-      FROM usage_logs WHERE pool_group=?`)
-      .bind(anchorAt, anchorAt, b.at, anchorAt, anchorAt, b.at, b.at, b.at - 20, b.at, prevObsAt, b.at, prevObsAt, b.at, b.pool);
-  }));
+  const evidence = await db.batch(observations.map(b=>evidenceStatement(db,b,oldFor(b))));
   const writes: D1PreparedStatement[] = [];
   const guard = 'EXISTS(SELECT 1 FROM mother_account WHERE id=1 AND email=? AND refresh_lock=?)';
   for (const [index, b] of observations.entries()) {
-    const next = observeQuota(oldFor(b), b, email, evidence[index].results[0] as unknown as CalibrationEvidence, enabled);
+    const snapshot=evidence[index].results[0] as unknown as EvidenceSnapshot;
+    const next = observeQuota(oldFor(b), b, email, snapshot, enabled);
     if (!next) continue;
     const fields = Object.keys(next.state), values = Object.values(next.state);
     writes.push(db.prepare(`INSERT INTO quota_calibration (${fields.join(',')}) SELECT ${fields.map(() => '?').join(',')}
@@ -290,6 +291,7 @@ export async function observationWrites(
       ${fields.filter(f => f !== 'pool_group' && f !== 'window_name').map(f => `${f}=excluded.${f}`).join(',')}
       WHERE quota_calibration.observed_at<excluded.observed_at OR quota_calibration.account_email<>excluded.account_email`)
       .bind(...values, email, lock));
+    writes.push(checkpointWrite(db,b,oldFor(b),next.state,snapshot,email,lock));
     if (next.sample) writes.push(db.prepare(`INSERT OR IGNORE INTO quota_samples
       (pool_group,window_name,observed_at,points,fraction_used,fraction_per_point,upper_fraction_per_unit) SELECT ?,?,?,?,?,?,? WHERE ${guard}`)
       .bind(b.pool, b.window, b.at, next.sample.points, next.sample.fraction, next.sample.rate, next.sample.upper, email, lock));

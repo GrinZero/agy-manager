@@ -157,6 +157,27 @@ test('offline completions are durable and retried without forwarding private fie
   const s=await server(async(req,res)=>{let raw='';for await(const c of req)raw+=c;if(!available){res.statusCode=503;res.end('{}');return;}received.push({url:req.url,body:JSON.parse(raw)});res.end('{}');});
   try{const root=await config(s.url);const first=await run(runtime,['commit'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});assert.deepEqual(JSON.parse(first.stdout),{});const files=await readdir(join(root,'pending'));assert.equal(files.length,1);assert.ok(!(await readFile(join(root,'pending',files[0]),'utf8')).includes('private'));available=true;await run(runtime,['check'],JSON.stringify({...payload,invocationNum:1}),{AGY_QUOTA_CONFIG_DIR:root});assert.equal((await readdir(join(root,'pending'))).length,0);assert.ok(received.some(r=>r.url==='/commit'&&r.body.invocationNum===0));}finally{await s.close();}
 });
+test('outbox replay tolerates a response slower than 700ms',async()=>{
+  let online=false;
+  const received=[];
+  const s=await server(async(req,res)=>{
+    let raw='';for await(const c of req)raw+=c;
+    if(!online){res.statusCode=503;res.end('{}');return;}
+    received.push({path:req.url,body:JSON.parse(raw)});
+    if(req.url==='/commit'){const t=setTimeout(()=>res.end('{}'),1100);res.on('close',()=>clearTimeout(t));}
+    else res.end('{}');
+  });
+  try {
+    const root=await config(s.url);
+    await run(runtime,['commit'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});
+    assert.equal((await readdir(join(root,'pending'))).length,1);
+    online=true;
+    const r=await run(runtime,['check'],JSON.stringify({...payload,invocationNum:1}),{AGY_QUOTA_CONFIG_DIR:root});
+    assert.deepEqual(JSON.parse(r.stdout),{});
+    assert.equal((await readdir(join(root,'pending'))).length,0);
+    assert.equal(received.filter(r=>r.path==='/commit').length,1);
+  } finally {await s.close();}
+});
 test('installed Hook forwards current calibration estimates without a client update',async()=>{
   const message='【动态额度估算】5 小时：1 分≈0.2%；周：1 分≈0.05%（历史校准）';
   const s=await server(async(req,res)=>{for await(const _ of req){}res.end(JSON.stringify({quota:{fiveHour:{percentPerPoint:.2}},injectSteps:[{ephemeralMessage:message}]}));});
@@ -165,18 +186,15 @@ test('installed Hook forwards current calibration estimates without a client upd
     assert.equal(r.code,0);assert.deepEqual(JSON.parse(r.stdout),{injectSteps:[{ephemeralMessage:message}]});
   } finally {await s.close();}
 });
-test('a response slower than the old 2.5 second deadline is accepted within five seconds',async()=>{
-  const s=await server((_req,res)=>{const t=setTimeout(()=>res.end('{}'),3200);res.on('close',()=>clearTimeout(t));});
-  try{const root=await config(s.url);const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});assert.equal(r.code,0);assert.deepEqual(JSON.parse(r.stdout),{});}finally{await s.close();}
-});
-test('stalled requests share one 16s network budget and fail closed once',async()=>{
+test('a cold connection slower than five seconds is accepted without restarting the request',async()=>{
   let attempts=0;
-  const s=await server((_req,res)=>{attempts++;const t=setTimeout(()=>res.end('{}'),12000);res.on('close',()=>clearTimeout(t));});
-  try{const root=await config(s.url),start=Date.now();const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});const elapsed=Date.now()-start;
-    assert.ok(attempts>=2&&attempts<=3,`attempts ${attempts}`);
-    assert.ok(elapsed>=15000&&elapsed<17500,`elapsed ${elapsed}ms`);
-    assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');assert.equal(r.code,0);
-  }finally{await s.close();}
+  const s=await server((_req,res)=>{attempts++;const t=setTimeout(()=>res.end('{}'),6500);res.on('close',()=>clearTimeout(t));});
+  try{const root=await config(s.url);const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});assert.equal(r.code,0);assert.deepEqual(JSON.parse(r.stdout),{});assert.equal(attempts,1);}finally{await s.close();}
+});
+test('stalled requests share a sixteen-second budget and fail closed once',async()=>{
+  let attempts=0;
+  const s=await server((_req,res)=>{attempts++;const t=setTimeout(()=>res.end('{}'),20000);res.on('close',()=>clearTimeout(t));});
+  try{const root=await config(s.url),start=Date.now();const r=await run(runtime,['check'],JSON.stringify(payload),{AGY_QUOTA_CONFIG_DIR:root});const elapsed=Date.now()-start;assert.equal(attempts,2);assert.ok(elapsed>=15500&&elapsed<17500,`elapsed ${elapsed}ms`);assert.equal(r.stdout.trim().split('\n').length,1);assert.equal(JSON.parse(r.stdout).terminationBehavior,'terminate');assert.equal(r.code,0);}finally{await s.close();}
 });
 test('slow outbox replay preserves a terminate response and stays inside the hook deadline',async()=>{
   let online=false,replayed=0;

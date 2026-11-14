@@ -287,7 +287,9 @@ function renderAvailability() {
   }
   const fresh = views[0]?.fresh;
   $('#updated').textContent = data.mother?.checked_at ? `成功查询 ${new Date(data.mother.checked_at).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}` : '尚未查询官方额度';
-  $('#connection-status').textContent = !data.mother ? '母账号尚未连接' : fresh ? '母账号实时在线' : graceValid ? '母账号容错运行中' : '母账号需要重连';
+  $('#connection-status').textContent = !data.mother ? '母账号尚未连接'
+    : graceValid && data.mother.status === 'connected' && data.mother.sync_mode === 'idle' ? '空闲中 · 每 5 分钟同步'
+    : fresh ? '母账号实时在线' : graceValid ? '母账号容错运行中' : '母账号需要重连';
   $('#connection-status').className = fresh ? 'connected' : '';
   $('#guard-status').textContent = '百分比限额 + 母账号真实余额把关';
   availabilitySignature = JSON.stringify(views.map(v => [v.fresh, v.graceValid, v.reason, v.windows.fiveHour.valid, v.windows.week.valid]));

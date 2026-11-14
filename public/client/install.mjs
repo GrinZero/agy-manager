@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {readFile,writeFile,mkdir,copyFile,chmod,rename,unlink,realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
-import {join,dirname,resolve,basename} from 'node:path';
+import {join,dirname,resolve,win32} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 
@@ -18,9 +18,9 @@ const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
 export function hookPlan(platform, nodeExe, scriptPath, guardDir) {
   if (platform !== 'win32') return {command: `${quote(nodeExe)} ${quote(scriptPath)}`, launchers: []};
   return {
-    command: `${basename(guardDir)}\\run.cmd`,
-    launchers: [{path: join(guardDir, 'run.cmd'), mode: 0o700,
-      content: `@echo off\r\nset "AGY_NODE=${nodeExe}"\r\nif not exist "%AGY_NODE%" set "AGY_NODE=node"\r\n"%AGY_NODE%" "%~dp0${basename(scriptPath)}" %*\r\n`}]
+    command: `${win32.basename(guardDir)}\\run.cmd`,
+    launchers: [{path: win32.join(guardDir, 'run.cmd'), mode: 0o700,
+      content: `@echo off\r\nset "AGY_NODE=${nodeExe}"\r\nif not exist "%AGY_NODE%" set "AGY_NODE=node"\r\n"%AGY_NODE%" "%~dp0${win32.basename(scriptPath)}" %*\r\n`}]
   };
 }
 

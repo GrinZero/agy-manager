@@ -6,14 +6,10 @@ import {check,commit,usage,resolveRule,reserveUnits,settleWeight,FIVE_HOURS,WEEK
 import type {Member,Policy} from '../src/types';
 import {finishOAuth,parseSummary,refreshMother,seal,unseal,reconciliation} from '../src/mother-account';
 import {hashToken} from '../src/security';
+import {applyMigrations} from './helpers/migrations';
 
 const adminToken='test-admin-'.padEnd(64,'x');
 let mf:Miniflare, db:any;
-const MIGRATIONS=[
-  '0001_initial.sql','0002_mother_account.sql','0003_admin_google_login.sql','0004_zero_quota_floor.sql',
-  '0005_adaptive_quota.sql','0006_member_deletion.sql','0007_initial_quota_usage.sql','0008_member_login.sql',
-  '0009_family_connection.sql','0010_remove_family_connection.sql','0011_precision_billing.sql','0012_percentage_quota.sql'
-];
 
 before(async()=>{
   const clientScript=await readFile('public/client/agy-quota.mjs','utf8');
@@ -27,8 +23,7 @@ before(async()=>{
     }
   }));
   db=await mf.getD1Database('DB');
-  const schema=(await Promise.all(MIGRATIONS.map(name=>readFile(`migrations/${name}`,'utf8')))).join('\n');
-  for(const statement of schema.split(';').map(x=>x.trim()).filter(Boolean))await db.prepare(statement).run();
+  await applyMigrations(db);
 });
 after(async()=>{await mf?.dispose();});
 
@@ -114,6 +109,52 @@ test('API authenticates both roles, stores only token hash and validates identit
   const view=await request('/api/admin/overview');
   assert.ok(!JSON.stringify(view.body).includes(m.token));
   assert.ok(!JSON.stringify(view.body).includes('token_hash'));
+});
+
+test('current picker models support display names, CLI ids and effort tiers with configurable priors',async()=>{
+  const p=await policy();
+  const models=[
+    ['Gemini 4 Carbon','gemini-4-carbon','gemini',2.25],
+    ['Gemini 4 Argon','gemini-4-argon','gemini',3.45],
+    ['Gemini 4 Hydrogen','gemini-4-hydrogen','gemini',3],
+    ['Orchestrator','orchestrator','gemini',3],
+    ['Gemini 3.8 Flash','gemini-3.8-flash','gemini',1],
+    ['Claude Opus 5.5','claude-opus-5.5','third_party',8],
+    ['Claude Sonnet 5.5','claude-sonnet-5.5','third_party',3],
+    ['GPT-OSS 120B','gpt-oss-120b','third_party',3]
+  ] as const;
+  for(const [display,id,pool,base] of models){
+    for(const [effort,factor] of [['Low',0.6],['Medium',1],['High',1.5]] as const){
+      const expected={pool,weight:Math.round(base*factor*1000)/1000};
+      for(const name of [`${display} ${effort}`,`${display} (${effort})`,`${id}-${effort.toLowerCase()}`])
+        assert.deepEqual(resolveRule(name,p),expected,name);
+    }
+  }
+  assert.deepEqual(resolveRule('  Orchestrator  ',p),{pool:'gemini',weight:3});
+  for(const name of ['gemini-4-hydrogen-medium','orchestrator','auto'])
+    assert.deepEqual(resolveRule(name,{...p,gemini_weight:5}),{pool:'gemini',weight:5});
+  for(const name of ['unknown-model','orchestrator-unknown'])
+    assert.throws(()=>resolveRule(name,p),{status:422});
+});
+
+test('current picker models reserve and settle in their respective pools without duplicate billing',async()=>{
+  const m=await member();
+  const models=['Gemini 4 Carbon Medium','Gemini 4 Argon Medium','Gemini 4 Hydrogen Medium','Orchestrator',
+    'Gemini 3.8 Flash Medium','Claude Opus 5.5 Medium','Claude Sonnet 5.5 Medium','GPT-OSS 120B (Medium)'];
+  for(const [n,model] of models.entries()){
+    const reserved=await request('/check',m.token,call(n,model));
+    assert.equal(reserved.status,200,model);
+    assert.notEqual(reserved.body.terminationBehavior,'terminate',model);
+    assert.equal((await request('/commit',m.token,call(n,model))).status,200,model);
+    assert.equal((await request('/commit',m.token,call(n,model))).status,200,model);
+  }
+  const v=(await request('/api/admin/overview')).body;
+  assert.deepEqual(v.members[0].usage.gemini,{fiveHour:1.27,week:0.318});
+  assert.deepEqual(v.members[0].usage.third_party,{fiveHour:1.4,week:0.35});
+  assert.equal(v.events.length,models.length);
+  const orchestrator=v.events.find((event:any)=>event.model_name==='Orchestrator');
+  assert.equal(orchestrator.pool_group,'gemini');
+  assert.equal(orchestrator.weight,3);
 });
 
 test('double-pool weights, percentage usage, and duplicate deliveries',async()=>{
@@ -338,7 +379,7 @@ test('mother account refresh pins exclusively to daily-cloudcode-pa, retries tra
 
     // Second refresh within 1 hour skips redundant loadCodeAssist RPC and reuses cached project & tier!
     attempts.length=0;
-    await db.prepare('UPDATE mother_account SET refresh_lock=0 WHERE id=1').run();
+    await db.prepare('UPDATE mother_account SET refresh_lock=0,attempted_at=? WHERE id=1').bind(Date.now()-60_000).run();
     const second=await refreshMother(env);
     assert.equal(second!.status,'connected');
     assert.equal(second!.snapshot!.tier,'g1-ultra-tier');
@@ -484,7 +525,7 @@ test('token rotation survives quota failure and authentication expiry immediatel
     const stored=await db.prepare('SELECT credentials FROM mother_account').first();
     assert.equal((await unseal<any>(env,stored.credentials)).refresh_token,'rotated-refresh');
     assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM real_quota_budgets').first()).n,0);
-    await db.prepare('UPDATE mother_account SET credentials=?').bind(await seal(env,{access_token:'expired',refresh_token:'revoked',expires_at:0})).run();
+    await db.prepare('UPDATE mother_account SET credentials=?,attempted_at=NULL').bind(await seal(env,{access_token:'expired',refresh_token:'revoked',expires_at:0})).run();
     globalThis.fetch=async()=>new Response('{}',{status:400});
     assert.equal((await refreshMother(env))!.status,'auth_required');
   } finally {globalThis.fetch=actualFetch;}

@@ -1,7 +1,7 @@
 import {test,before,after,beforeEach} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {applyMigrations} from './helpers/migrations';
 
 let mf:Miniflare,db:any,redirectToken=false;
 const outbound:string[]=[],origin='https://quota.example';
@@ -29,10 +29,7 @@ before(async()=>{
     }
   }));
   db=await mf.getD1Database('DB');
-  for(const name of ['0001_initial.sql','0002_mother_account.sql','0003_admin_google_login.sql','0004_zero_quota_floor.sql','0005_adaptive_quota.sql','0006_member_deletion.sql','0007_initial_quota_usage.sql','0008_member_login.sql','0009_family_connection.sql','0010_remove_family_connection.sql','0011_precision_billing.sql','0012_percentage_quota.sql']) {
-    const schema=await readFile(`migrations/${name}`,'utf8');
-    for(const statement of schema.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
-  }
+  await applyMigrations(db);
 });
 after(async()=>{await mf?.dispose();});
 beforeEach(async()=>{

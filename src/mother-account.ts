@@ -2,6 +2,7 @@ import {hashToken,HttpError,json,newToken,readBody,string} from './security';
 import type {Env,Policy} from './types';
 import {adminIdentity,configuredEmail,cookieValue,createBrowserSession,createMemberSession,setCookie,verifyGoogleAdmin} from './admin-session';
 import {FRESH_SECONDS,MOTHER_GRACE_SECONDS,observationWrites,type QuotaObservation} from './quota-state';
+import {ensureUsageTotals} from './usage-totals';
 
 // Installed-app OAuth identity published by Antigravity-Manager. A registered
 // web OAuth client can override both values and use a direct HTTPS callback.
@@ -16,10 +17,21 @@ const UPSTREAM_UA='antigravity/hub/2.28.0 (aidev_client; os_type=linux; arch=x86
 const SCOPES=['openid','https://www.googleapis.com/auth/cloud-platform','https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile','https://www.googleapis.com/auth/cclog','https://www.googleapis.com/auth/experimentsandconfigs'];
 interface Credentials {access_token:string;refresh_token:string;expires_at:number}
-interface Account {email:string;credentials:string;status:string;snapshot_json:string|null;checked_at:number|null;attempted_at:number|null;last_error:string|null;refresh_lock:number}
+interface Account {email:string;credentials:string;status:string;snapshot_json:string|null;checked_at:number|null;attempted_at:number|null;last_error:string|null;refresh_lock:number;last_activity_at:number;has_reservations:number}
 export interface QuotaBucket {id:string;window:string;remaining_fraction:number;reset_time:string|null}
 export interface QuotaGroup {name:string;buckets:QuotaBucket[]}
 interface Snapshot {groups:QuotaGroup[];tier:string|null;project?:string|null}
+// Leave five seconds of scheduling tolerance for the once-per-minute Cron.
+const REFRESH_INTERVAL_MS=55_000;
+const IDLE_AFTER_MS=300_000,IDLE_REFRESH_MS=300_000;
+function accountStatement(db:D1Database,nowMs:number) {
+  const at=Math.floor(nowMs/1000);
+  return db.prepare(`SELECT m.*,COALESCE((SELECT MAX(last_activity_at) FROM usage_activity),0) AS last_activity_at,
+    (EXISTS(SELECT 1 FROM usage_logs WHERE pool_group='gemini' AND status='reserved' AND expires_at>${at}) OR
+     EXISTS(SELECT 1 FROM usage_logs WHERE pool_group='third_party' AND status='reserved' AND expires_at>${at})) AS has_reservations
+    FROM mother_account m WHERE m.id=1`);
+}
+function idle(row:Account,nowMs:number) {return !row.has_reservations&&nowMs-row.last_activity_at*1000>=IDLE_AFTER_MS;}
 const base64=(data:Uint8Array)=>btoa(String.fromCharCode(...data));
 const bytes=(value:string)=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
 const base64url=(data:Uint8Array)=>base64(data).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
@@ -45,10 +57,14 @@ async function remote(url:string,init:RequestInit,timeout=10_000):Promise<Record
   if(!response.ok)throw new HttpError(response.status===401 || url==='https://oauth2.googleapis.com/token'&&response.status===400?401:502,`上游查询失败（HTTP ${response.status}）`);
   return await response.json() as Record<string,any>;
 }
-async function upstreamRpc(method:string,headers:Record<string,string>,body:string):Promise<Record<string,any>> {
+async function upstreamRpc(method:string,headers:Record<string,string>,body:string,deadline?:number):Promise<Record<string,any>> {
   let lastError:unknown;
   for(let attempt=0;attempt<2;attempt++) {
-    try {return await remote(UPSTREAM_API+method,{method:'POST',headers,body},9_000);}
+    try {
+      const timeout=deadline===undefined?9_000:Math.min(9_000,deadline-Date.now());
+      if(timeout<=0)throw new HttpError(504,'官方余额同步超时');
+      return await remote(UPSTREAM_API+method,{method:'POST',headers,body},timeout);
+    }
     catch(error) {
       if(error instanceof HttpError&&error.status===401)throw error;
       lastError=error;
@@ -78,27 +94,39 @@ export function parseSummary(data:Record<string,any>):QuotaGroup[] {
   });
 }
 export async function motherAccount(env:Pick<Env,'DB'>,nowMs=Date.now()) {
-  const row=await env.DB.prepare('SELECT * FROM mother_account WHERE id=1').first<Account>();
+  const row=await accountStatement(env.DB,nowMs).first<Account>();
   if(!row)return null;
+  return motherAccountView(row,nowMs);
+}
+function motherAccountView(row:Account,nowMs:number) {
   const age=row.checked_at===null?Infinity:nowMs-row.checked_at;
   return {
     email:row.email,status:row.status,checked_at:row.checked_at,attempted_at:row.attempted_at,last_error:row.last_error,
     stale:age>FRESH_SECONDS*1000,
+    sync_mode:idle(row,nowMs)?'idle':'active',
+    sync_interval_seconds:idle(row,nowMs)?300:60,
     grace_expired:row.status==='auth_required'||age>MOTHER_GRACE_SECONDS*1000,
     snapshot:row.snapshot_json?JSON.parse(row.snapshot_json) as Snapshot:null
   };
 }
-export async function refreshMother(env:Env) {
-  const row=await env.DB.prepare('SELECT * FROM mother_account WHERE id=1').first<Account>();
+export async function refreshMother(env:Env,options:{background?:boolean;maxDurationMs?:number}={}) {
+  const row=await accountStatement(env.DB,Date.now()).first<Account>();
   if(!row)return null;
   const now=Date.now();
-  const lock=await env.DB.prepare('UPDATE mother_account SET refresh_lock=? WHERE id=1 AND credentials=? AND refresh_lock<?')
-    .bind(now+35_000,row.credentials,now).run();
+  const interval=options.background&&idle(row,now)?IDLE_REFRESH_MS:REFRESH_INTERVAL_MS;
+  const deadline=options.maxDurationMs===undefined?undefined:now+options.maxDurationMs;
+  // Shared D1 state coordinates Cron, tabs and isolates. Failed attempts back off
+  // too, while reconnecting OAuth resets attempted_at and can sync immediately.
+  if(row.refresh_lock>now||row.attempted_at!==null&&row.attempted_at>now-interval)return motherAccountView(row,now);
+  const lock=await env.DB.prepare(`UPDATE mother_account SET refresh_lock=? WHERE id=1 AND credentials=? AND refresh_lock<=?
+    AND (attempted_at IS NULL OR attempted_at<=?)`)
+    .bind(now+35_000,row.credentials,now,now-interval).run();
   if(!lock.meta.changes)return motherAccount(env,now);
   try {
     let auth=await unseal<Credentials>(env,row.credentials);
     if(auth.expires_at<now+60_000) {
-      const result=await remote('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({...oauthClient(env),grant_type:'refresh_token',refresh_token:auth.refresh_token})});
+      const result=await remote('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({...oauthClient(env),grant_type:'refresh_token',refresh_token:auth.refresh_token})},
+        deadline===undefined?10_000:Math.max(1,Math.min(10_000,deadline-Date.now())));
       auth=credentials(result,auth.refresh_token);
       // Persist refresh immediately; later quota failures must not discard rotated credentials.
       await env.DB.prepare('UPDATE mother_account SET credentials=? WHERE id=1 AND email=? AND refresh_lock=?').bind(await seal(env,auth),row.email,now+35_000).run();
@@ -106,11 +134,12 @@ export async function refreshMother(env:Env) {
     const cached=row.snapshot_json?JSON.parse(row.snapshot_json) as Snapshot:null;
     const headers={Authorization:`Bearer ${auth.access_token}`,'Content-Type':'application/json','User-Agent':UPSTREAM_UA};
     const needMeta=!cached?.project||!cached?.tier||now-(row.checked_at??0)>3_600_000;
-    const tier=needMeta?await upstreamRpc('loadCodeAssist',headers,JSON.stringify({metadata:{ideType:'ANTIGRAVITY'}})).catch(()=>null):null;
+    const tier=needMeta?await upstreamRpc('loadCodeAssist',headers,JSON.stringify({metadata:{ideType:'ANTIGRAVITY'}}),
+      deadline===undefined?undefined:Math.min(deadline,Date.now()+2_000)).catch(()=>null):null;
     const rawProject=tier?.cloudaicompanionProject;
     const project=(typeof rawProject==='string'&&rawProject?rawProject:typeof rawProject?.id==='string'&&rawProject.id?rawProject.id:null)??cached?.project??null;
     // Summary is the authoritative source for both windows; reuse cached project to halve RPC load and prevent parameter drift.
-    const summary=await upstreamRpc('retrieveUserQuotaSummary',headers,JSON.stringify(project?{project}:{}));
+    const summary=await upstreamRpc('retrieveUserQuotaSummary',headers,JSON.stringify(project?{project}:{}),deadline);
     const snapshot:Snapshot={
       groups:parseSummary(summary),
       tier:tier?.paidTier?.name||tier?.paidTier?.id||tier?.currentTier?.name||tier?.currentTier?.id||cached?.tier||null,
@@ -121,21 +150,32 @@ export async function refreshMother(env:Env) {
     const calibration=await observationWrites(env.DB,reconciled,row.email,now+35_000,!!policy?.calibration_enabled);
     const writes=reconciled.map(b=>env.DB.prepare(`INSERT INTO real_quota_budgets
       (pool_group,window_name,remaining_fraction,snapshot_at,expires_at) SELECT ?,?,?,?,?
-      WHERE EXISTS(SELECT 1 FROM mother_account WHERE id=1 AND email=? AND refresh_lock=?)`)
+      WHERE EXISTS(SELECT 1 FROM mother_account WHERE id=1 AND email=? AND refresh_lock=?)
+      ON CONFLICT(pool_group,window_name) DO UPDATE SET remaining_fraction=excluded.remaining_fraction,
+        snapshot_at=excluded.snapshot_at,expires_at=excluded.expires_at`)
       .bind(b.pool,b.window,b.fraction,b.at,b.at+MOTHER_GRACE_SECONDS,row.email,now+35_000));
     await env.DB.batch([
-      env.DB.prepare('DELETE FROM real_quota_budgets WHERE EXISTS(SELECT 1 FROM mother_account WHERE id=1 AND email=? AND refresh_lock=?)').bind(row.email,now+35_000),
+      env.DB.prepare(`DELETE FROM real_quota_budgets WHERE (pool_group||':'||window_name) NOT IN (${reconciled.map(()=>'?').join(',')||"''"})
+        AND EXISTS(SELECT 1 FROM mother_account WHERE id=1 AND email=? AND refresh_lock=?)`)
+        .bind(...reconciled.map(b=>`${b.pool}:${b.window}`),row.email,now+35_000),
       ...writes,
       ...calibration,
       env.DB.prepare(`UPDATE mother_account SET snapshot_json=?,checked_at=?,attempted_at=?,status='connected',last_error=NULL,refresh_lock=0
         WHERE id=1 AND email=? AND refresh_lock=?`).bind(JSON.stringify(snapshot),now,now,row.email,now+35_000)
     ]);
+    await Promise.all((['gemini','third_party'] as const).map(pool=>ensureUsageTotals(env.DB,pool,Math.floor(now/1000))));
   } catch(error) {
     const message=error instanceof HttpError?error.message:'额度查询暂时不可用，请稍后刷新';
     await env.DB.prepare('UPDATE mother_account SET status=?,last_error=?,attempted_at=?,refresh_lock=0 WHERE id=1 AND email=? AND refresh_lock=?')
       .bind(error instanceof HttpError&&error.status===401?'auth_required':'error',message,now,row.email,now+35_000).run();
   }
   return motherAccount(env,Date.now());
+}
+// Resume an idle service before admitting a call; preserve the existing 15m error grace.
+export async function refreshMotherForCall(env:Env) {
+  const now=Date.now(),row=await accountStatement(env.DB,now).first<Account>();
+  if(row&&row.status!=='auth_required'&&idle(row,now)&&(row.checked_at===null||now-row.checked_at>FRESH_SECONDS*1000))
+    await refreshMother(env,{maxDurationMs:8_000});
 }
 interface OAuthContext {purpose:'mother'|'login';browserHash:string;origin?:string;request?:Request}
 export async function startOAuth(env:Env,context:OAuthContext={purpose:'mother',browserHash:''}) {

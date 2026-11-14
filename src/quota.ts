@@ -2,10 +2,12 @@ import {HttpError, integer, string} from './security';
 import type {Invocation, Limits, Member, Policy, Pool, UsageRow} from './types';
 import {
   FIVE_HOURS, WEEK, MOTHER_GRACE_SECONDS,
-  cycleStartSql, upperRateSql, budgetStatement, budgetView, type BudgetRow
+  upperRateSql, activeUsageSql, budgetStatement, budgetView, type BudgetRow
 } from './quota-state';
+import {cyclesReadySql,cycleUsageSql,ensureUsageTotals} from './usage-totals';
 
 export {FIVE_HOURS, WEEK, MOTHER_GRACE_SECONDS};
+export {overviewUsage} from './usage-statistics';
 
 export function roundPoints(value: number) {
   return Math.round(value * 1000) / 1000;
@@ -29,7 +31,7 @@ function effortFactor(model: string) {
   return 1;
 }
 export function resolveRule(model: string, p: Policy): {pool: Pool; weight: number} {
-  const m = model.toLowerCase();
+  const m = model.trim().toLowerCase();
   const factor = effortFactor(m);
   if (m.includes('claude')) {
     const base = m.includes('opus') ? p.opus_weight : m.includes('haiku') ? roundPoints(p.tp_weight * 0.4) : p.tp_weight;
@@ -39,7 +41,10 @@ export function resolveRule(model: string, p: Policy): {pool: Pool; weight: numb
     const base = m.includes('mini') || m.includes('nano') ? roundPoints(p.tp_weight * 0.4) : p.tp_weight;
     return {pool: 'third_party', weight: Math.max(0.05, roundPoints(base * factor))};
   }
-  if (m.includes('gemini') || m === 'auto' || m.startsWith('auto ') || m.startsWith('auto-')) {
+  // Orchestrator has no provider prefix in the picker. Until an official cost
+  // ratio is available, use the same Gemini base prior as Hydrogen and Auto.
+  const orchestrator = /^orchestrator(?:[-_\s]+(?:low|medium|high)|\s*\((?:low|medium|high)\))?$/.test(m);
+  if (m.includes('gemini') || orchestrator || m === 'auto' || m.startsWith('auto ') || m.startsWith('auto-')) {
     const base = m.includes('flash') ? p.flash_weight : m.includes('carbon') ? roundPoints(p.gemini_weight * 0.75) : m.includes('argon') ? roundPoints(p.gemini_weight * 1.15) : p.gemini_weight;
     return {pool: 'gemini', weight: Math.max(0.05, roundPoints(base * factor))};
   }
@@ -76,15 +81,15 @@ export function limits(l: Limits, pool: Pool, buffer = 0) {
 
 // Returns tracked usage (committed in current cycle + live holds) in percentage points (0..100%).
 function usageStatement(db: D1Database, pool: Pool, now: number, memberId?: string) {
-  const five = cycleStartSql(pool, 'fiveHour', now), week = cycleStartSql(pool, 'week', now);
   const k5 = upperRateSql(pool, 'fiveHour'), kw = upperRateSql(pool, 'week');
   return db.prepare(`SELECT
-    ROUND(COALESCE(SUM(CASE WHEN status='reserved' AND expires_at>? OR status='committed' AND committed_at>=${five} THEN weight ELSE 0 END),0) * ${k5} * 100, 3) AS fiveHour,
-    ROUND(COALESCE(SUM(CASE WHEN status='reserved' AND expires_at>? OR status='committed' AND committed_at>=${week} THEN weight ELSE 0 END),0) * ${kw} * 100, 3) AS week
-    FROM usage_logs WHERE pool_group=? ${memberId ? 'AND member_id=?' : ''}`)
-    .bind(now, now, pool, ...(memberId ? [memberId] : []));
+    ROUND(COALESCE(SUM(five_units),0) * ${k5} * 100, 3) AS fiveHour,
+    ROUND(COALESCE(SUM(week_units),0) * ${kw} * 100, 3) AS week
+    FROM (${cycleUsageSql(pool,now)}) ${memberId ? 'WHERE member_id=?' : ''}`)
+    .bind(...(memberId ? [memberId] : []));
 }
 export async function usage(db: D1Database, pool: Pool, now: number, memberId?: string) {
+  await ensureUsageTotals(db,pool,now);
   const res = (await usageStatement(db, pool, now, memberId).first<{fiveHour: number; week: number}>())!;
   return {fiveHour: roundPoints(res.fiveHour), week: roundPoints(res.week)};
 }
@@ -123,13 +128,11 @@ function match(row: UsageRow, i: Invocation) {
 }
 
 function windowAvailSql(pool: Pool, window: 'fiveHour' | 'week', now: number, kExpr: string, buffer: number) {
+  const after = `MAX(b.snapshot_at, CASE WHEN c.reset_at IS NOT NULL AND c.reset_at <= ${now} AND b.snapshot_at < c.reset_at THEN c.reset_at ELSE 0 END)`;
   return `COALESCE((
     SELECT (
       (CASE WHEN c.reset_at IS NOT NULL AND c.reset_at <= ${now} AND b.snapshot_at < c.reset_at THEN 1.0 ELSE b.remaining_fraction END)
-      - COALESCE((SELECT SUM(u.weight) FROM usage_logs u WHERE u.pool_group='${pool}' AND (
-          u.status='reserved' AND u.expires_at>${now} OR
-          u.status='committed' AND u.committed_at >= MAX(b.snapshot_at, CASE WHEN c.reset_at IS NOT NULL AND c.reset_at <= ${now} AND b.snapshot_at < c.reset_at THEN c.reset_at ELSE 0 END)
-        )), 0) * ${kExpr}
+      - COALESCE((SELECT SUM(weight) FROM (${activeUsageSql(pool, after, now)})), 0) * ${kExpr}
     ) * 100.0 - ${buffer}
     FROM real_quota_budgets b
     LEFT JOIN quota_calibration c ON c.pool_group='${pool}' AND c.window_name='${window}'
@@ -139,8 +142,8 @@ function windowAvailSql(pool: Pool, window: 'fiveHour' | 'week', now: number, kE
 
 export async function check(db: D1Database, member: Member, p: Policy, i: Invocation, now: number) {
   const {pool, weight: ruleWeight} = resolveRule(i.modelName, p);
+  await ensureUsageTotals(db,pool,now);
   const ml = limits(member, pool), fl = limits(p, pool, p.buffer_percent);
-  const five = cycleStartSql(pool, 'fiveHour', now), week = cycleStartSql(pool, 'week', now);
   const k5 = upperRateSql(pool, 'fiveHour'), kw = upperRateSql(pool, 'week');
   const real5Expr = windowAvailSql(pool, 'fiveHour', now, 'rates.k5', p.buffer_percent);
   const realwExpr = windowAvailSql(pool, 'week', now, 'rates.kw', p.buffer_percent);
@@ -167,15 +170,14 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
       ) THEN 1 ELSE 0 END AS ok
     ),
     active AS (
-      SELECT member_id,weight,status,committed_at FROM usage_logs WHERE pool_group=? AND
-        (status='committed' AND committed_at>=MIN(${five},${week}) OR status='reserved' AND expires_at>?)
+      ${cycleUsageSql(pool,now)}
     ),
     totals AS (
       SELECT
-        COALESCE(SUM(CASE WHEN member_id=? AND (status='reserved' OR committed_at>=${five}) THEN weight ELSE 0 END),0) AS mu5,
-        COALESCE(SUM(CASE WHEN member_id=? AND (status='reserved' OR committed_at>=${week}) THEN weight ELSE 0 END),0) AS muw,
-        COALESCE(SUM(CASE WHEN status='reserved' OR committed_at>=${five} THEN weight ELSE 0 END),0) AS fu5,
-        COALESCE(SUM(CASE WHEN status='reserved' OR committed_at>=${week} THEN weight ELSE 0 END),0) AS fuw
+        COALESCE(SUM(CASE WHEN member_id=? THEN five_units ELSE 0 END),0) AS mu5,
+        COALESCE(SUM(CASE WHEN member_id=? THEN week_units ELSE 0 END),0) AS muw,
+        COALESCE(SUM(five_units),0) AS fu5,
+        COALESCE(SUM(week_units),0) AS fuw
       FROM active
     ),
     real_caps AS (
@@ -184,7 +186,7 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
     INSERT INTO usage_logs (member_id,pool_group,model_name,weight,conversation_id,invocation_num,status,created_at,expires_at)
     SELECT ?,?,?,req.u,?,?,'reserved',?,?
     FROM totals, rates, req, mother_gate, real_caps
-    WHERE mother_gate.ok = 1
+    WHERE mother_gate.ok = 1 AND ${cyclesReadySql(pool,now)}
       AND ? > 0 AND ? > 0 AND ? > 0 AND ? > 0
       AND (totals.mu5 + req.u) * rates.k5 * 100.0 <= ? + 1e-6
       AND (totals.muw + req.u) * rates.kw * 100.0 <= ? + 1e-6
@@ -200,7 +202,6 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
       i.contextTokens ?? 0, member.member_id, i.conversationId,
       ruleWeight,
       now, pool, now,
-      pool, now,
       member.member_id, member.member_id,
       member.member_id, pool, i.modelName, i.conversationId, i.invocationNum, now, now + p.reservation_seconds,
       ml.fiveHour, ml.week, fl.fiveHour, fl.week,
@@ -208,16 +209,14 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
       now
     );
 
-  const motherStmt = db.prepare('SELECT status, checked_at FROM mother_account WHERE id = 1');
+  const motherStmt = db.prepare(`SELECT status, checked_at,${cyclesReadySql(pool,now)} AS totals_ready FROM mother_account WHERE id = 1`);
   const latestCtxStmt = db.prepare(`SELECT COALESCE(input_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(output_tokens,0) AS tokens
     FROM usage_logs WHERE member_id=? AND conversation_id=? AND status='committed' ORDER BY id DESC LIMIT 1`)
     .bind(member.member_id, i.conversationId);
 
-  const [result, identity, memberUsage, familyUsage, budgets, motherRes, ctxRes] = await db.batch([
+  const [result, identity, budgets, motherRes, ctxRes] = await db.batch([
     reservation,
     existingStatement(db, member, i),
-    usageStatement(db, pool, now, member.member_id),
-    usageStatement(db, pool, now),
     budgetStatement(db, pool, now),
     motherStmt,
     latestCtxStmt
@@ -225,9 +224,8 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
 
   const quota = budgetView(budgets.results as unknown as BudgetRow[], p, pool, now);
   const row = identity.results[0] as unknown as UsageRow | undefined;
-  const mu = memberUsage.results[0] as unknown as {fiveHour: number; week: number};
-  const fu = familyUsage.results[0] as unknown as {fiveHour: number; week: number};
-  const motherRow = motherRes.results[0] as unknown as {status: string; checked_at: number | null} | undefined;
+  const motherRow = motherRes.results[0] as unknown as {status: string; checked_at: number | null;totals_ready:number} | undefined;
+  if(motherRow&&!motherRow.totals_ready)throw new HttpError(503,'额度账期正在切换，请稍后重试');
   const dbCtx = (ctxRes.results[0] as unknown as {tokens?: number} | undefined)?.tokens ?? 0;
 
   if (row && (row.status === 'committed' || row.status === 'reserved' && row.expires_at > now)) match(row, i);
@@ -239,6 +237,13 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
     fiveHour: roundPoints(effectiveUnits * quota.fiveHour.upperPercentPerUnit),
     week: roundPoints(effectiveUnits * quota.week.upperPercentPerUnit)
   };
+  if(admitted&&i.invocationNum%10_000!==0)return {quota,injectSteps:[]};
+  // Only balance notifications and denied calls need the display totals.
+  const [memberUsage,familyUsage]=await db.batch([
+    usageStatement(db,pool,now,member.member_id),usageStatement(db,pool,now)
+  ]);
+  const mu=memberUsage.results[0] as unknown as {fiveHour:number;week:number};
+  const fu=familyUsage.results[0] as unknown as {fiveHour:number;week:number};
 
   if (!admitted) {
     if (!motherRow) {

@@ -3,6 +3,28 @@ import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {usage} from '../src/quota';
+import {overviewUsage} from '../src/usage-statistics';
+import {applyMigration} from './helpers/migrations';
+
+test('cumulative migration preserves existing ledger and credentials and initializes totals lazily',async()=>{
+  const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'dist/index.js',compatibilityDate:'2026-07-01',d1Databases:['DB']}));
+  try {
+    const db=await mf.getD1Database('DB') as unknown as D1Database;
+    const migration='0015_cumulative_usage.sql';
+    for(const name of (await readdir('migrations')).filter(n=>n.endsWith('.sql')&&n<migration).sort())await applyMigration(db,name);
+    await db.prepare("INSERT INTO members(member_id,name,token_hash,created_at) VALUES('m','Existing','existing-hash',1)").run();
+    await db.prepare("INSERT INTO mother_account(id,email,credentials) VALUES(1,'owner@example.com','encrypted-existing')").run();
+    await db.prepare(`INSERT INTO usage_logs(member_id,pool_group,model_name,weight,conversation_id,invocation_num,status,created_at,expires_at,committed_at)
+      VALUES('m','gemini','gemini-flash',2,'existing',1,'committed',2000000000,2000000000,2000000000)`).run();
+    const tables=['members','mother_account','usage_logs','policy'];
+    const before=await Promise.all(tables.map(async table=>(await db.prepare(`SELECT * FROM ${table}`).all()).results));
+    await applyMigration(db,migration);
+    assert.deepEqual(await Promise.all(tables.map(async table=>(await db.prepare(`SELECT * FROM ${table}`).all()).results)),before);
+    assert.deepEqual((await overviewUsage(db,'gemini',2000000000)).family,await usage(db,'gemini',2000000000));
+    await db.prepare("UPDATE members SET enabled=0,deleted_at=2000000001 WHERE member_id='m'").run();
+    assert.equal((await overviewUsage(db,'gemini',2000000001)).family.fiveHour,.2);
+  } finally {await mf.dispose();}
+});
 
 test('removing family import erases its grants and pending consent while preserving members, quota credentials and usage',async()=>{
   const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'dist/index.js',compatibilityDate:'2026-07-01',d1Databases:['DB']}));
@@ -136,6 +158,7 @@ test('percentage migration converts legacy member/policy point limits to 0-100%,
     assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM member_sessions').first<any>()).n,1);
     assert.equal((await db.prepare('SELECT expires_at FROM real_quota_budgets').first<any>()).expires_at,2000000900);
     assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM usage_logs').first<any>()).n,0);
+    for(const name of (await readdir('migrations')).filter(n=>n.endsWith('.sql')&&n>'0012_percentage_quota.sql').sort())await applyMigration(db as unknown as D1Database,name);
     assert.deepEqual(await usage(db as unknown as D1Database,'gemini',2000000010),{fiveHour:0,week:0});
   } finally {await mf.dispose();}
 });

@@ -1,7 +1,7 @@
 import {bearer, hashToken, HttpError, integer, json, newToken, readBody, real, string} from './security';
-import {check, commit, invocation, limits, release, roundPoints, usage, reconciledBudget} from './quota';
+import {check, commit, invocation, limits, release, roundPoints, overviewUsage, reconciledBudget} from './quota';
 import type {Env, Limits, Member, Policy} from './types';
-import {motherAccount, motherAdmin, refreshMother} from './mother-account';
+import {motherAccount, motherAdmin, refreshMother,refreshMotherForCall} from './mother-account';
 import {authenticateAdmin, browserSession, requireSameOrigin} from './admin-session';
 import {auth} from './auth';
 
@@ -23,9 +23,11 @@ async function overview(db: D1Database, now: number, memberId?: string) {
     db.prepare(`SELECT u.id,u.member_id,m.name,u.pool_group,u.model_name,u.weight,u.status,u.created_at,u.committed_at,u.expires_at,u.source,u.input_tokens,u.cache_read_tokens,u.output_tokens,u.tool_calls
       FROM usage_logs u JOIN members m ON m.member_id = u.member_id ${memberId ? 'WHERE u.member_id=?' : ''} ORDER BY u.id DESC LIMIT 80`).bind(...(memberId ? [memberId] : [])).all()
   ]);
-  const pools = await Promise.all((['gemini', 'third_party'] as const).map(async pool => ({
+  const poolNames = ['gemini', 'third_party'] as const;
+  const totals = Object.fromEntries(await Promise.all(poolNames.map(async pool => [pool, await overviewUsage(db, pool, now)] as const)));
+  const pools = await Promise.all(poolNames.map(async pool => ({
     pool,
-    usage: await usage(db, pool, now),
+    usage: totals[pool].family,
     limits: limits(p, pool, p.buffer_percent),
     totalLimits: limits(p, pool),
     realBudget: await reconciledBudget(db, p, pool, now)
@@ -39,13 +41,13 @@ async function overview(db: D1Database, now: number, memberId?: string) {
       week_percent: rb ? roundPoints(Number(e.weight) * rb.week.upperPercentPerUnit) : 0
     };
   });
-  const members = await Promise.all(all.results.map(async m => ({
+  const members = all.results.map(m => ({
     ...safeMember(m),
     usage: {
-      gemini: await usage(db, 'gemini', now, m.member_id),
-      third_party: await usage(db, 'third_party', now, m.member_id)
+      gemini: totals.gemini.members.get(m.member_id) ?? {fiveHour: 0, week: 0},
+      third_party: totals.third_party.members.get(m.member_id) ?? {fiveHour: 0, week: 0}
     }
-  })));
+  }));
   const mother = await motherAccount({DB: db}, now * 1000);
   return {
     policy: p,
@@ -57,6 +59,8 @@ async function overview(db: D1Database, now: number, memberId?: string) {
       checked_at: mother.checked_at,
       stale: mother.stale,
       grace_expired: mother.grace_expired,
+      sync_mode:mother.sync_mode,
+      sync_interval_seconds:mother.sync_interval_seconds,
       snapshot: mother.snapshot
     } : mother,
     now
@@ -193,7 +197,10 @@ async function hooks(req: Request, env: Env, path: string) {
   }
   const i = invocation(body), p = reads[1].results[0] as unknown as Policy | undefined, now = Math.floor(Date.now() / 1000);
   if (!p) throw new HttpError(503, '数据库尚未初始化');
-  if (path === '/check') return respond(await check(env.DB, member, p, i, now));
+  if (path === '/check') {
+    await refreshMotherForCall(env);
+    return respond(await check(env.DB,member,p,i,Math.floor(Date.now()/1000)));
+  }
   // Explicit failure fields are honored when clients supply them; current official PostInvocation has none.
   if (body.success === false || (typeof body.error === 'string' && body.error.length > 0)) await release(env.DB, member, i.conversationId, i.invocationNum);
   else await commit(env.DB, member, p, i, now);
@@ -237,5 +244,5 @@ export default {
     response.headers.append('Server-Timing', `app;dur=${(performance.now() - started).toFixed(1)}`);
     return response;
   },
-  async scheduled(_event: ScheduledController, env: Env) { await refreshMother(env); }
+  async scheduled(_event: ScheduledController, env: Env) { await refreshMother(env,{background:true}); }
 };
