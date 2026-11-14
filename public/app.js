@@ -345,7 +345,7 @@ function settingsTab(tab, focus = false) {
 }
 function route(focus = true) {
   const [candidate, tab] = location.hash.slice(1).split('/');
-  const requested = ['overview', 'members', 'activity', 'settings', 'tutorial'].includes(candidate) ? candidate : 'overview';
+  const requested = ['overview', 'members', 'activity', 'settings', 'tutorial', 'manual'].includes(candidate) ? candidate : 'overview';
   const page = requested === 'settings' && viewerRole === 'member' ? 'tutorial' : requested;
   document.querySelectorAll('main>.page').forEach(section => section.hidden = section.id !== page);
   document.querySelectorAll('.main-nav a, #settings-top').forEach(link => {
@@ -408,6 +408,17 @@ function syncMemberShare() {
 function currentInstallOS() {
   return /win/i.test(navigator.platform || navigator.userAgent || '') ? 'windows' : 'posix';
 }
+function installProxy() {
+  const raw = (document.querySelector('[data-install-proxy]')?.value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') return '';
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
 function installCommand(os = currentInstallOS(), extra = '') {
   const win = os === 'windows';
   const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
@@ -418,8 +429,21 @@ function installCommand(os = currentInstallOS(), extra = '') {
   const q = win ? bare : quote;
   const file = win ? 'agy-quota-install.mjs' : '/tmp/agy-quota-install.mjs';
   const curl = win ? 'curl.exe' : 'curl';
+  // `--no-proxy` already clears the saved proxy; appending --proxy as well would emit a
+  // contradictory command (the installer would honour --no-proxy, but nobody could tell).
+  const proxy = extra.includes('--no-proxy') ? '' : installProxy();
   return `${curl} -fsS ${q(location.origin + '/client/install.mjs')} -o ${win ? file : quote(file)}\n` +
-    `node ${win ? file : quote(file)} --url ${q(location.origin)}${extra ? ' ' + extra : ''}`;
+    `node ${win ? file : quote(file)} --url ${q(location.origin)}${extra ? ' ' + extra : ''}${proxy ? ` --proxy ${q(proxy)}` : ''}`;
+}
+// A copy-paste health probe for the manual. Kept ASCII-only and free of quotes on
+// Windows: `cmd /c` misparses a quoted -w value (and `curl` is an Invoke-WebRequest
+// alias in Windows PowerShell 5.1, so curl.exe is required there).
+function healthCommand(os = currentInstallOS()) {
+  const win = os === 'windows';
+  const origin = location.origin;
+  return win
+    ? `curl.exe -sS -o NUL -w HTTP:%{http_code}:%{time_total}s ${origin}/health`
+    : `curl -sS -o /dev/null -w 'HTTP %{http_code} %{time_total}s\\n' ${origin}/health`;
 }
 function renderInstallCommands() {
   const os = document.querySelector('[data-install-os]')?.value || currentInstallOS();
@@ -428,19 +452,37 @@ function renderInstallCommands() {
   $('#install-command').textContent = value;
   $('#tutorial-command').textContent = value;
   $('#upgrade-command').textContent = installCommand(os, '--upgrade');
+  $('#manual-install').textContent = value;
+  $('#manual-upgrade').textContent = installCommand(os, '--upgrade');
+  $('#manual-no-proxy').textContent = installCommand(os, '--upgrade --no-proxy');
+  $('#manual-health').textContent = healthCommand(os);
+  // Never hand out a proxy command the user did not actually type: if the field is
+  // filled but invalid, say so instead of substituting the documented example.
+  const rawProxy = (document.querySelector('[data-install-proxy]')?.value || '').trim();
+  const proxy = installProxy();
+  const proxyButton = document.querySelector('[data-copy-command="manual-proxy"]');
+  if (rawProxy && !proxy) {
+    $('#manual-proxy').textContent = '代理地址无效：只填 http:// 开头的 origin，例如 http://127.0.0.1:7897';
+    if (proxyButton) proxyButton.disabled = true;
+  } else {
+    $('#manual-proxy').textContent = installCommand(os, `--upgrade${proxy ? '' : ' --proxy http://127.0.0.1:7897'}`);
+    if (proxyButton) proxyButton.disabled = false;
+  }
 }
 function installationPrompt(token = '【复制时会自动填入你的成员令牌】') {
+  const proxy = installProxy();
   return `请直接在我当前这台电脑上安装 AGY 家庭配额门禁，并完成配置检查。请实际执行，不要只给我一份操作教程。目标是我日常运行 Antigravity 的本机；如果你只能访问云端沙箱或容器，无法操作我的电脑，请说明这个限制，不要在远程环境安装后宣称本机已经完成。
 
 服务地址：${location.origin}
 成员令牌：${token}
+本机代理（可选）：${proxy || '不使用'}
 
 这份令牌用于把本机调用记入我的个人额度。请只在本机安装过程中使用它，不要在命令行参数、终端输出、日志或最后的回复中回显令牌。
 
 请依次完成：
 1. 检查当前系统和 Node.js。安装器支持 macOS / Linux / Windows，需要 Node.js 20+。按目标系统选择 shell：macOS / Linux 用终端（sh/bash/zsh），Windows 用 cmd 或 PowerShell；命令中的引号风格要与之匹配，Windows 请用双引号，不要照搬单引号写法。缺少依赖时按本机环境处理；如果当前工具无法执行命令，或系统不支持，请明确告诉我卡在哪里，不要声称已经安装。
 2. 新建独立临时目录（macOS / Linux 可用 mktemp -d 并设为 0700；Windows 可在 %TEMP% 下新建目录，chmod 相关权限在 Windows 忽略），下载 ${location.origin}/client/install.mjs 到该目录并检查脚本。将上面的成员令牌写入同一目录内的临时文件（类 Unix 设为 0600），通过 --token-file 传入，避免交互输入和把令牌放进命令行。
-3. 使用真实用户的主目录执行安装器，命令结构为：node <临时目录>/install.mjs --url <服务地址> --token-file <临时令牌文件>。请用本机 shell 正确引用实际路径，不要原样执行尖括号占位符，也不要安装到临时 HOME。安装器会合并已有 Hooks、备份原配置，设置 CLI useG1Credits=false，并实际试跑一次 Hook 做自检；只有看到「Hook 自检通过」才算安装成功，自检失败要停下来并把报错原样告诉我。若已有门禁，以本次提供的地址和令牌更新；保留其他 Hooks 和用户设置，遇到无效 JSON 应停止并说明问题。
+3. 使用真实用户的主目录执行安装器，命令结构为：node <临时目录>/install.mjs --url <服务地址> --token-file <临时令牌文件>${proxy ? ` --proxy ${proxy}` : ''}。请用本机 shell 正确引用实际路径，不要原样执行尖括号占位符，也不要安装到临时 HOME。安装器会合并已有 Hooks、备份原配置，设置 CLI useG1Credits=false，并实际试跑一次 Hook 做自检；只有看到「Hook 自检通过」才算安装成功，自检失败要停下来并把报错原样告诉我。若已有门禁，以本次提供的地址和令牌更新；保留其他 Hooks 和用户设置，遇到无效 JSON 应停止并说明问题。
 4. 检查 ~/.gemini/config/hooks.json 中 family-quota-guard 已启用，PreInvocation、PostInvocation、Stop 分别连接 check、commit、release；检查 agy-quota.mjs 存在（Windows 还应有同目录的 run.cmd 启动器）、凭据权限为 0600（Windows 忽略）、CLI useG1Credits 为 false。门禁单次主请求时限必须为 10 秒，所有主请求尝试共用 16 秒网络预算，后续尝试按剩余时间缩短；临时网络错误、HTTP 408/429/5xx 最多重试 2 次（总共最多 3 次尝试），使用指数退避与随机抖动，并遵守 Retry-After；鉴权失败、参数错误和额度不足不重试。脚本总时限为 16.5 秒，三类 Hooks 的外层 timeout 均为 18 秒，避免外层提前杀死进程；如已有本机配置不同，备份后调整，并保留超时暂停新调用的行为。读取凭据时只在内存核对地址和令牌，不要打印文件内容。请求 ${location.origin}/health 确认服务连通性；这只能验证服务可达，不代表令牌或实际调用已验收。完成后删除临时令牌文件。
 5. 如果你能操作 Antigravity 桌面端 / IDE 设置，将 AI Credit Overages 设为 Never；无法操作时，明确告诉我这个设置需要在哪里完成。不要自动结束我正在运行的会话。
 
@@ -588,12 +630,30 @@ async function initialize() {
   $('#login-dialog').showModal();
 }
 document.querySelectorAll('[data-install-os]').forEach(select=>{select.onchange=renderInstallCommands;});
+{
+  const inputs=[...document.querySelectorAll('[data-install-proxy]')];
+  let stored='';try{stored=localStorage.getItem('agy-install-proxy')||'';}catch{}
+  for(const input of inputs){
+    input.value=stored;
+    input.setAttribute('aria-invalid',String(!!stored.trim()&&!installProxy()));
+    input.oninput=()=>{
+      const raw=input.value.trim();
+      for(const other of inputs){if(other!==input)other.value=input.value;other.setAttribute('aria-invalid',String(!!raw&&!installProxy()));}
+      try{raw?localStorage.setItem('agy-install-proxy',raw):localStorage.removeItem('agy-install-proxy');}catch{}
+      renderInstallCommands();
+    };
+  }
+}
 renderInstallCommands();
 $('#installation-prompt').textContent=installationPrompt();
 $('#installation-token').addEventListener('input',()=>{$('#installation-token').setCustomValidity('');clearPromptFallbacks();});
 $('#copy-install-prompt').onclick=()=>copyInstallationPrompt($('#installation-token'),$('#install-prompt-fallback'));
 $('#copy-token-prompt').onclick=()=>copyInstallationPrompt($('#generated-token'),$('#token-prompt-fallback'));
-$('#copy-tutorial-install').onclick=()=>navigator.clipboard.writeText(installCommand()).then(()=>toast('安装命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+$('#copy-tutorial-install').onclick=()=>navigator.clipboard.writeText($('#tutorial-command').textContent).then(()=>toast('安装命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+document.querySelectorAll('[data-copy-command]').forEach(button=>{
+  button.onclick=()=>navigator.clipboard.writeText($('#'+button.dataset.copyCommand).textContent)
+    .then(()=>toast('命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
+});
 $('#token-tutorial').onclick=()=>$('#token-dialog').close();
 $('#self-install-token').onclick=async()=>{
   let result;

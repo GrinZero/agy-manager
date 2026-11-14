@@ -6,19 +6,52 @@ import {join,resolve} from 'node:path';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {createHash} from 'node:crypto';
-import {envelope,validateUrl,readTelemetry,readContextTelemetry,send,selfUpdate} from '../public/client/agy-quota.mjs';
-import {hookPlan} from '../public/client/install.mjs';
+import {envelope,validateUrl,validateProxy,proxyFetch,requestFetch,readTelemetry,readContextTelemetry,send,selfUpdate} from '../public/client/agy-quota.mjs';
+import {hookPlan,normalizeProxy} from '../public/client/install.mjs';
 
 const token='agy_'+'a'.repeat(64), runtime=resolve('public/client/agy-quota.mjs'),installer=resolve('public/client/install.mjs');
 function run(file,args,stdin='',env={}) {return new Promise((resolve,reject)=>{const p=spawn(process.execPath,[file,...args],{env:{...process.env,...env}});let stdout='',stderr='';p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.on('error',reject);p.on('exit',code=>resolve({code,stdout,stderr}));p.stdin.end(stdin);});}
 const payload={conversationId:'c-1',invocationNum:0,modelName:'gemini-flash',lastUserInput:'private prompt',transcriptPath:'/private/path',workspacePaths:['/private/work']};
 async function config(url) {const root=await mkdtemp(join(tmpdir(),'agy-client-'));await writeFile(join(root,'credentials.json'),JSON.stringify({url,token}));return root;}
-async function server(handler) {const s=createServer(handler);await new Promise(r=>s.listen(0,'127.0.0.1',r));return {url:`http://127.0.0.1:${s.address().port}`,close:()=>new Promise(r=>s.close(r))};}
+async function server(handler) {const s=createServer(handler);await new Promise(r=>s.listen(0,'127.0.0.1',r));return {url:`http://127.0.0.1:${s.address().port}`,server:s,close:()=>new Promise(r=>s.close(r))};}
 test('client strips private data and requires secure remote URL',()=>{
   assert.deepEqual(envelope(payload,'check'),{conversationId:'c-1',invocationNum:0,modelName:'gemini-flash'});
   assert.deepEqual(envelope({...payload,initialNumSteps:18,invocationNum:2},'check'),{conversationId:'c-1',invocationNum:180002,modelName:'gemini-flash'});
   assert.throws(()=>validateUrl('http://example.com'));assert.throws(()=>validateUrl('https://evil:password@example.com'));
   assert.equal(validateUrl('https://example.com'),'https://example.com');
+});
+test('explicit proxy accepts only HTTP origins and keeps credentials out of the target URL',()=>{
+  assert.equal(validateProxy('http://user:pass@127.0.0.1:7897/').port,'7897');
+  assert.throws(()=>validateProxy('https://127.0.0.1:7897'),/HTTP proxy/);
+  assert.throws(()=>validateProxy('http://127.0.0.1:7897/proxy'),/origin/);
+  assert.equal(normalizeProxy('http://127.0.0.1:7897/'),'http://127.0.0.1:7897');
+  assert.throws(()=>normalizeProxy('socks5://127.0.0.1:7897'),/HTTP 代理/);
+});
+test('proxy sends HTTP requests in absolute form with proxy auth and bypasses localhost targets',async()=>{
+  let seen;
+  const proxy=await server(async(req,res)=>{
+    let raw='';for await(const c of req)raw+=c;
+    seen={url:req.url,host:req.headers.host,auth:req.headers['proxy-authorization'],body:raw};
+    res.setHeader('Content-Type','application/json');res.end('{"ok":true}');
+  });
+  const local=await server((_req,res)=>res.end('{"direct":true}'));
+  try {
+    const response=await proxyFetch('http://service.invalid/check?x=1',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},proxy.url.replace('http://','http://user:pass@'));
+    assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true});
+    assert.equal(seen.url,'http://service.invalid/check?x=1');assert.equal(seen.host,'service.invalid');
+    assert.equal(seen.auth,'Basic '+Buffer.from('user:pass').toString('base64'));assert.equal(seen.body,'{}');
+    const direct=await requestFetch({url:local.url,token,proxy:'http://127.0.0.1:1'},local.url+'/health');
+    assert.deepEqual(await direct.json(),{direct:true});
+  } finally {await proxy.close();await local.close();}
+});
+test('proxy establishes an HTTPS CONNECT tunnel and surfaces proxy rejection',async()=>{
+  let tunnel;
+  const proxy=await server(()=>{});
+  proxy.server.on('connect',(req,socket)=>{tunnel=req.url;socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');});
+  try {
+    await assert.rejects(proxyFetch('https://example.invalid/v1internal:streamGenerateContent?alt=sse',{method:'POST',body:'{}'},proxy.url),/Proxy CONNECT 502/);
+    assert.equal(tunnel,'example.invalid:443');
+  } finally {await proxy.close();}
 });
 test('Windows hook command is cmd /c safe and never embeds the user path',()=>{
   const guardDir='C:\\Users\\Some One\\.gemini\\config\\agy-family-quota';
@@ -215,7 +248,8 @@ test('slow outbox replay preserves a terminate response and stays inside the hoo
 });
 test('installer preserves other hooks/settings, protects credentials, and uninstalls cleanly',async()=>{
   const home=await mkdtemp(join(tmpdir(),'agy install '));const root=join(home,'.gemini','config'),cli=join(home,'.gemini','antigravity-cli');await mkdir(root,{recursive:true});await mkdir(cli,{recursive:true});await writeFile(join(root,'hooks.json'),JSON.stringify({existing:{enabled:true}}));await writeFile(join(cli,'settings.json'),JSON.stringify({theme:'dark',useG1Credits:true}));const tokenFile=join(home,'token');await writeFile(tokenFile,token);
-  const r=await run(installer,['--home',home,'--url','https://example.com','--token-file',tokenFile]);assert.equal(r.code,0,r.stderr);
+  const proxy='http://127.0.0.1:7897/';
+  const r=await run(installer,['--home',home,'--url','https://example.com','--token-file',tokenFile,'--proxy',proxy]);assert.equal(r.code,0,r.stderr);
   const hooks=JSON.parse(await readFile(join(root,'hooks.json'),'utf8')),settings=JSON.parse(await readFile(join(cli,'settings.json'),'utf8'));
   assert.deepEqual(hooks.existing,{enabled:true});assert.equal(settings.theme,'dark');assert.equal(settings.useG1Credits,false);assert.equal(hooks['family-quota-guard'].Stop.length,1);
   if(process.platform==='win32')assert.equal(hooks['family-quota-guard'].PreInvocation[0].command,'agy-family-quota\\run.cmd check');
@@ -223,8 +257,13 @@ test('installer preserves other hooks/settings, protects credentials, and uninst
   for(const event of ['PreInvocation','PostInvocation','Stop'])assert.equal(hooks['family-quota-guard'][event][0].timeout,18);
   if(process.platform!=='win32')assert.equal((await stat(join(root,'agy-family-quota','credentials.json'))).mode&0o777,0o600);
   assert.ok((await readdir(root)).some(x=>x.startsWith('hooks.json.backup-')));
+  const credentialsPath=join(root,'agy-family-quota','credentials.json');
+  assert.equal(JSON.parse(await readFile(credentialsPath,'utf8')).proxy,'http://127.0.0.1:7897');
   const upgrade=await run(installer,['--home',home,'--upgrade']);assert.equal(upgrade.code,0,upgrade.stderr);
-  assert.equal(JSON.parse(await readFile(join(root,'agy-family-quota','credentials.json'),'utf8')).token,token);
+  const upgraded=JSON.parse(await readFile(credentialsPath,'utf8'));
+  assert.equal(upgraded.token,token);assert.equal(upgraded.proxy,'http://127.0.0.1:7897');
+  const noProxy=await run(installer,['--home',home,'--upgrade','--no-proxy']);assert.equal(noProxy.code,0,noProxy.stderr);
+  assert.equal('proxy' in JSON.parse(await readFile(credentialsPath,'utf8')),false);
   const undo=await run(installer,['--home',home,'--uninstall']);assert.equal(undo.code,0);const after=JSON.parse(await readFile(join(root,'hooks.json'),'utf8'));assert.deepEqual(after,{existing:{enabled:true}});
 });
 test('installer refuses malformed existing JSON before writing any configuration',async()=>{

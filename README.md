@@ -100,12 +100,23 @@ node public/client/install.mjs --url https://YOUR-WORKER.workers.dev
 
 安装器会提示粘贴成员令牌，输入隐藏。无人值守安装用 `--token-file /absolute/path/to/token`，不要把令牌放进命令行或 URL。
 
+管理页 `/#manual` 是面向成员的「守门员使用手册」，按成员电脑的系统生成安装、更新、带代理更新、取消代理和 `/health` 测速五条命令，并附参数速查与常见问题。改动 UI 时注意 `tests/manual.test.mjs` 会校验手册页的 id 连线与命令写法。
+
+如果这台电脑的 Node 无法稳定直连配额服务（例如 TLS 握手反复超时），可在安装命令追加 `--proxy http://127.0.0.1:7897`。代理只用于配额门禁进程，不修改系统代理；支持无认证的 HTTP 代理，也支持 `http://user:pass@host:port` 形式。配置写入 `~/.gemini/config/agy-family-quota/credentials.json` 的 `proxy` 字段，目标为 localhost / 127.0.0.1 时自动绕过代理。`--upgrade` 会保留原代理，`--upgrade --no-proxy` 可移除。管理页「安装 / 更新」的安装弹窗也提供可选代理输入，只用于生成命令并保存在当前浏览器，不会上传服务器。
+
+从本地仓库安装时示例：
+
+```sh
+node public/client/install.mjs --url https://YOUR-WORKER.workers.dev --proxy http://127.0.0.1:7897
+```
+
 安装器将：
 
 - 合并 `~/.gemini/config/hooks.json`，保留其他 Hooks；注册 `PreInvocation`、`PostInvocation`、`Stop`。
 - 将依赖为零的 Node Hook 和权限为 `0600` 的凭据写到 `~/.gemini/config/agy-family-quota/`。
 - 合并 `~/.gemini/antigravity-cli/settings.json` 并设置 `useG1Credits: false`。
 - Windows 下额外写入 `run.cmd` 启动器；安装完成前用目标 shell 试跑一次 Hook 并校验 JSON 输出（不发起网络请求、不写流水），自检失败即报错且不更新 `hooks.json`。
+- 可选 `--proxy` 为配额请求配置本机 HTTP 代理；升级默认保留，`--no-proxy` 显式移除。
 - 修改前备份原文件，后缀 `.backup-时间戳`；遇到无效 JSON 时停止，不覆盖原配置。
 
 重启原生客户端。桌面端 / IDE 的 **AI Credit Overages → Never** 需要手动设置。全局 Hook 覆盖支持此协议的 App、CLI、IDE，但仍应分别做一次拦截验收。
