@@ -10,5 +10,5 @@ catch(e) {
 }
 const keySetup=spawnSync(process.execPath,['scripts/setup-account-key.mjs','--local'],{stdio:'inherit'});
 if(keySetup.status!==0)process.exit(keySetup.status||1);
-const p=wrangler(['d1','migrations','apply','agy-family-quota','--local'],{stdio:'inherit'});
+const p=wrangler(['d1','migrations','apply','DB','--local'],{stdio:'inherit'});
 process.exitCode=p.status??1;

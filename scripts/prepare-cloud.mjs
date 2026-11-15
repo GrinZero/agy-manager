@@ -12,4 +12,4 @@ if(config.d1_databases[0].database_id !== '00000000-0000-0000-0000-000000000000'
   await writeFile('wrangler.json',JSON.stringify(config,null,2)+'\n');
   console.log('已创建 D1 并写入 wrangler.json。');
 }
-console.log('下一步：npm exec wrangler secret put ADMIN_TOKEN，然后 npm run deploy');
+console.log('下一步：设置 ADMIN_GOOGLE_EMAIL，运行 node scripts/setup-account-key.mjs --production 配置加密密钥，然后 npm run deploy。');

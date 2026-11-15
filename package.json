@@ -11,7 +11,7 @@
     "build": "wrangler deploy --dry-run --outdir dist",
     "test": "npm run build && node --import tsx --test tests/*.test.ts tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
-    "deploy": "wrangler d1 migrations apply agy-family-quota --remote && wrangler deploy",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "client:install": "node public/client/install.mjs"
   },
   "keywords": [],
@@ -26,5 +26,18 @@
     "typescript": "^7.0.2",
     "wrangler": "^4.160.0"
   },
-  "private": true
+  "private": true,
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "保存家庭成员、百分比配额账本和加密后的母账号凭据；部署时会自动创建 D1 并应用迁移。"
+      },
+      "ADMIN_GOOGLE_EMAIL": {
+        "description": "填写母账号的 Google 邮箱；只有这个账号可以首次登录并成为家庭管理员。"
+      },
+      "ACCOUNT_ENCRYPTION_KEY": {
+        "description": "填写随机生成的 64 位小写十六进制密钥。运行 `node -e \"console.log(require('node:crypto').randomBytes(32).toString('hex'))\"` 生成，备份后填入；后续部署必须保留原值。"
+      }
+    }
+  }
 }
