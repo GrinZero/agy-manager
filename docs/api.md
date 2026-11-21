@@ -17,8 +17,10 @@
 | `POST /api/auth/logout` | 同源 | 撤销当前后台会话及待完成授权 |
 | `GET /api/admin/overview` | 管理员 Cookie 或 Bearer | 策略、成员用量、最近 80 条流水 |
 | `GET /api/member/overview` | 成员 Cookie | 家庭额度概况、自己的限额与最近 80 条个人流水 |
-| `POST /api/member/rotate-token` | 成员 Cookie + 同源 | 重置自己的安装令牌，旧令牌立即失效 |
-| `POST /api/admin/members` | 管理员 Cookie 或 Bearer | 创建成员（必填 name、email），返回一次性明文令牌 |
+| `GET /api/member/token` | Google 登录 Cookie | 查看绑定到当前 Google 账号的安装令牌。旧令牌尚未保存原文时返回 `{"token":null}` |
+| `POST /api/member/token` | Google 登录 Cookie + 同源 | 验证并保存自己的原有令牌，请求体为 `{"token":"…"}` |
+| `POST /api/member/rotate-token` | Google 登录 Cookie + 同源 | 重置绑定到当前 Google 账号的安装令牌，旧令牌立即失效 |
+| `POST /api/admin/members` | 管理员 Cookie 或 Bearer | 创建成员（必填 name、email），返回初始安装令牌 |
 | `PATCH /api/admin/members/:id` | 管理员 Cookie 或 Bearer | 改名、绑定邮箱、限额、启停 |
 | `DELETE /api/admin/members/:id` | 管理员 Cookie 或 Bearer | 删除成员，保留历史用量与在途结算 |
 | `POST /api/admin/members/:id/rotate-token` | 管理员 Cookie 或 Bearer | 轮换成员令牌 |

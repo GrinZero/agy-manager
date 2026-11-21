@@ -20,6 +20,7 @@ export interface Member extends Limits {
   email: string | null;
   google_id: string | null;
   token_hash: string;
+  token_ciphertext: string | null;
   enabled: number;
   created_at: number;
   deleted_at: number | null;

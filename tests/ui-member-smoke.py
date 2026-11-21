@@ -22,7 +22,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, **({'executable_path': executable} if executable else {}))
     context = browser.new_context(viewport=dict(width=1440, height=1000), permissions=['clipboard-read', 'clipboard-write'])
     page = context.new_page()
-    errors, requests = [], []
+    errors, requests, saved_token = [], [], [None]
     page.on('pageerror', lambda error: errors.append(str(error)))
     def signed_in():
         return any(c['name'] == 'agy_admin' and c['value'] == 'member-fixture' for c in context.cookies())
@@ -41,9 +41,16 @@ with sync_playwright() as p:
         elif path == '/api/member/overview':
             assert signed_in()
             route.fulfill(json=view)
+        elif path == '/api/member/token':
+            assert signed_in()
+            if route.request.method == 'POST':
+                assert route.request.post_data_json == dict(token='agy_'+'b'*64)
+                saved_token[0] = 'agy_'+'b'*64
+            route.fulfill(json=dict(token=saved_token[0]))
         elif path == '/api/member/rotate-token':
             assert signed_in()
-            route.fulfill(json=dict(member_id='my-id', token='agy_'+'c'*64))
+            saved_token[0] = 'agy_'+'c'*64
+            route.fulfill(json=dict(member_id='my-id', token=saved_token[0]))
         elif path == '/api/auth/logout':
             route.fulfill(headers={'Set-Cookie': 'agy_admin=; Path=/; Max-Age=0'}, json=dict(ok=True))
         else:
@@ -67,6 +74,15 @@ with sync_playwright() as p:
     page.locator('#copy-install-prompt').click()
     expect(page.locator('#installation-token')).to_be_focused()
     assert not page.locator('#installation-token').evaluate('(el) => el.validity.valid')
+    expect(page.locator('#save-self-token')).to_be_visible()
+    page.locator('#installation-token').fill('agy_'+'b'*64)
+    page.locator('#save-self-token').click()
+    expect(page.locator('#installation-token')).not_to_be_editable()
+    expect(page.locator('#installation-token')).to_have_value('agy_'+'b'*64)
+    page.reload(wait_until='networkidle')
+    expect(page.locator('#installation-token')).to_have_value('agy_'+'b'*64)
+    page.locator('#copy-self-token').click()
+    assert page.evaluate('navigator.clipboard.readText()') == 'agy_'+'b'*64
     page.locator('#tutorial-preparation summary').click()
     expect(page.locator('.tutorial-steps > li').first).to_be_visible()
     page.locator('#tutorial-preparation summary').click()
@@ -101,8 +117,10 @@ with sync_playwright() as p:
     expect(page.locator('#install-prompt-fallback')).to_be_visible()
     expect(page.locator('#install-prompt-fallback')).to_have_value(prompt)
     page.evaluate('() => { navigator.clipboard.writeText = window.originalClipboardWrite; }')
-    page.locator('#installation-token').fill('agy_'+'c'*64)
+    page.locator('#members-nav').click()
+    page.locator('.main-nav a[href="#tutorial"]').click()
     expect(page.locator('#install-prompt-fallback')).not_to_be_visible()
+    expect(page.locator('#installation-token')).to_have_value('agy_'+'c'*64)
     page.locator('#toast').wait_for(state='hidden')
     page.evaluate('() => { document.activeElement?.blur(); window.scrollTo(0, 0); }')
     for width in [390, 320]:
@@ -120,11 +138,12 @@ with sync_playwright() as p:
     expect(page.locator('#settings')).not_to_be_visible()
     page.reload(wait_until='networkidle')
     expect(page.locator('#tutorial')).to_be_visible()
-    expect(page.locator('#installation-token')).to_have_value('')
+    expect(page.locator('#installation-token')).to_have_value('agy_'+'c'*64)
     page.locator('.account-menu summary').click()
     expect(page.locator('#account-label')).to_have_text(me['email'])
     page.locator('#logout').click()
     expect(page.locator('#login-dialog')).to_be_visible()
+    expect(page.locator('#installation-token')).to_have_value('')
     assert not errors, errors
     browser.close()
-print('Member acceptance passed: Google login, own quota, collapsed preparation, AI prompt clipboard/fallback, token confirmation, no admin requests, reload, logout, desktop and 320/390px mobile.')
+print('Member acceptance passed: Google login, own quota, legacy token save, persistent token display and copy, AI prompt clipboard/fallback, token confirmation, no admin requests, logout, desktop and 320/390px mobile.')

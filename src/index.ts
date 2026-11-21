@@ -1,7 +1,7 @@
 import {bearer, hashToken, HttpError, integer, json, newToken, readBody, real, string} from './security';
 import {check, commit, invocation, limits, release, roundPoints, overviewUsage, reconciledBudget} from './quota';
 import type {Env, Limits, Member, Policy} from './types';
-import {motherAccount, motherAdmin, refreshMother,refreshMotherForCall} from './mother-account';
+import {motherAccount, motherAdmin, refreshMother,refreshMotherForCall,seal,unseal} from './mother-account';
 import {authenticateAdmin, browserSession, requireSameOrigin} from './admin-session';
 import {auth} from './auth';
 
@@ -15,7 +15,7 @@ async function policy(db: D1Database) {
   if (!p) throw new HttpError(503, '数据库尚未初始化，请先执行迁移');
   return {...p, real_quota_guard: 1, real_quota_floor: 0};
 }
-function safeMember({token_hash: _hash, google_id: _googleId, ...member}: Member) { return member; }
+function safeMember({token_hash: _hash, token_ciphertext: _ciphertext, google_id: _googleId, ...member}: Member) { return member; }
 async function overview(db: D1Database, now: number, memberId?: string) {
   const [p, all, events] = await Promise.all([
     policy(db),
@@ -78,19 +78,45 @@ async function saveMember(statement: D1PreparedStatement) {
     throw error;
   }
 }
-async function memberPortal(req: Request, env: Env, path: string) {
-  const session = await browserSession(req, env);
-  if (!session) throw new HttpError(401, '请使用绑定的 Google 邮箱登录');
-  if (session.role !== 'member') throw new HttpError(403, '请使用成员账号访问');
-  if (path === '/api/member/overview' && req.method === 'GET') return json({...await overview(env.DB, Math.floor(Date.now() / 1000), session.member_id), viewer: {role: 'member', email: session.email}});
+async function memberToken(req: Request, env: Env, session: NonNullable<Awaited<ReturnType<typeof browserSession>>>, path: string) {
+  const owner = session.role === 'member'
+    ? {where: 'email=? AND member_id=? AND google_id=?', args: [session.email, session.member_id, session.google_id]}
+    : {where: 'email=? AND (google_id IS NULL OR google_id=?)', args: [session.email, session.google_id]};
+  const where = `${owner.where} AND enabled=1 AND deleted_at IS NULL`;
+  const missing = () => session.role === 'member'
+    ? new HttpError(401, '成员状态已变更，请重新登录')
+    : new HttpError(404, '当前 Google 账号没有启用的成员额度');
+  if (path === '/api/member/token' && req.method === 'GET') {
+    const member = await env.DB.prepare(`SELECT token_ciphertext FROM members WHERE ${where}`)
+      .bind(...owner.args).first<Pick<Member, 'token_ciphertext'>>();
+    if (!member) throw missing();
+    return json({token: member.token_ciphertext === null ? null : await unseal<string>(env, member.token_ciphertext)});
+  }
+  if (path === '/api/member/token' && req.method === 'POST') {
+    requireSameOrigin(req);
+    const token = string((await readBody(req)).token, '安装令牌', 256);
+    const result = await env.DB.prepare(`UPDATE members SET token_ciphertext=COALESCE(token_ciphertext, ?)
+      WHERE ${where} AND token_hash=? RETURNING member_id`)
+      .bind(await seal(env, token), ...owner.args, await hashToken(token)).first();
+    if (!result) throw new HttpError(400, '请填写与你的账号匹配的当前安装令牌');
+    return json({token});
+  }
   if (path === '/api/member/rotate-token' && req.method === 'POST') {
     requireSameOrigin(req);
     const token = newToken();
-    const updated = await env.DB.prepare(`UPDATE members SET token_hash=? WHERE member_id=? AND email=? AND google_id=? AND enabled=1 AND deleted_at IS NULL RETURNING member_id,name`)
-      .bind(await hashToken(token), session.member_id, session.email, session.google_id).first<{member_id: string; name: string}>();
-    if (!updated) throw new HttpError(401, '成员状态已变更，请重新登录');
+    const updated = await env.DB.prepare(`UPDATE members SET token_hash=?, token_ciphertext=? WHERE ${where} RETURNING member_id,name`)
+      .bind(await hashToken(token), await seal(env, token), ...owner.args).first<{member_id: string; name: string}>();
+    if (!updated) throw missing();
     return json({...updated, token});
   }
+  throw new HttpError(404, '接口不存在');
+}
+async function memberPortal(req: Request, env: Env, path: string) {
+  const session = await browserSession(req, env);
+  if (!session) throw new HttpError(401, '请使用绑定的 Google 邮箱登录');
+  if (path === '/api/member/token' || path === '/api/member/rotate-token') return memberToken(req, env, session, path);
+  if (session.role !== 'member') throw new HttpError(403, '请使用成员账号访问');
+  if (path === '/api/member/overview' && req.method === 'GET') return json({...await overview(env.DB, Math.floor(Date.now() / 1000), session.member_id), viewer: {role: 'member', email: session.email}});
   throw new HttpError(404, '接口不存在');
 }
 async function admin(req: Request, env: Env, path: string): Promise<Response> {
@@ -103,8 +129,8 @@ async function admin(req: Request, env: Env, path: string): Promise<Response> {
     const email = memberEmail(b.email);
     const token = newToken(), id = crypto.randomUUID();
     await saveMember(env.DB.prepare(`INSERT INTO members
-      (member_id,name,email,token_hash,gemini_5h_limit,gemini_wk_limit,tp_5h_limit,tp_wk_limit,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).bind(id, name, email, await hashToken(token), l.gemini_5h_limit, l.gemini_wk_limit, l.tp_5h_limit, l.tp_wk_limit, now));
+      (member_id,name,email,token_hash,token_ciphertext,gemini_5h_limit,gemini_wk_limit,tp_5h_limit,tp_wk_limit,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(id, name, email, await hashToken(token), await seal(env, token), l.gemini_5h_limit, l.gemini_wk_limit, l.tp_5h_limit, l.tp_wk_limit, now));
     return json({member_id: id, name, email, token}, 201);
   }
   const memberPath = /^\/api\/admin\/members\/([a-zA-Z0-9-]+)(\/rotate-token)?$/.exec(path);
@@ -121,8 +147,10 @@ async function admin(req: Request, env: Env, path: string): Promise<Response> {
     }
     if (memberPath[2] && req.method === 'POST') {
       const token = newToken();
-      await env.DB.prepare('UPDATE members SET token_hash = ? WHERE member_id = ?').bind(await hashToken(token), m.member_id).run();
-      return json({member_id: m.member_id, name: m.name, token});
+      const updated = await env.DB.prepare('UPDATE members SET token_hash=?, token_ciphertext=? WHERE member_id=? AND deleted_at IS NULL RETURNING member_id,name')
+        .bind(await hashToken(token), await seal(env, token), m.member_id).first<{member_id: string; name: string}>();
+      if (!updated) throw new HttpError(404, '成员不存在');
+      return json({...updated, token});
     }
     if (!memberPath[2] && req.method === 'PATCH') {
       const b = await readBody(req), l = readLimits(b, m);

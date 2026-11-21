@@ -4,6 +4,7 @@ const $ = selector => document.querySelector(selector);
 let viewerRole = 'admin', viewerEmail = '';
 let adminToken = '', data = null, toastTimer, oauthMode = 'mother', memberWindow = 'fiveHour';
 let policyLoaded = false, refreshTask = null, availabilitySignature = '';
+let selfTokenRequest = null;
 const limitKeys = ['gemini_5h_limit', 'gemini_wk_limit', 'tp_5h_limit', 'tp_wk_limit'];
 const number = value => Number(value).toLocaleString('zh-CN', {maximumFractionDigits: 3});
 function node(tag, cls, value) {
@@ -72,12 +73,12 @@ function showLogin() {
   adminToken = ''; data = null; policyLoaded = false;
   document.body.dataset.auth = 'guest';
   $('#admin-token').value = ''; $('#generated-token').value = ''; $('#callback-url').value = '';
-  $('#installation-token').value = ''; clearPromptFallbacks();
+  resetSelfToken();
   document.querySelectorAll('dialog[open]').forEach(dialog => { if (dialog.id !== 'login-dialog') dialog.close(); });
   if (!$('#login-dialog').open) $('#login-dialog').showModal();
 }
-async function api(path, method = 'GET', body) {
-  const res = await fetch(`/api/${viewerRole === 'member' ? 'member' : 'admin'}/${path}`, {method, headers: {
+async function api(path, method = 'GET', body, scope = viewerRole) {
+  const res = await fetch(`/api/${scope}/${path}`, {method, headers: {
     ...(adminToken ? {Authorization: `Bearer ${adminToken}`} : {}),
     ...(body ? {'Content-Type': 'application/json'} : {})
   }, ...(body ? {body: JSON.stringify(body)} : {})});
@@ -222,7 +223,7 @@ function renderEvents() {
       if (viewerRole === 'admin' && data.members?.length) empty.append(node('p', '', `已添加 ${data.members.length} 位成员，但服务端还没有收到任何门禁上报。`));
       const steps = node('ol', 'empty-steps');
       steps.append(
-        node('li', '', '成员在「教程」生成安装令牌，重新运行安装 / 更新命令，并确认安装输出里有「Hook 自检通过」。'),
+        node('li', '', '成员在「教程」查看安装令牌，运行安装 / 更新命令，并确认安装输出里有「Hook 自检通过」。'),
         node('li', '', '升级过系统、更换过 Node.js 路径后也要重新安装一次；完全重启 Antigravity 客户端，再调用一次模型。'),
         node('li', '', '回到本页点击右上角「刷新」。')
       );
@@ -314,7 +315,10 @@ function render() {
   $('#members-title').textContent = viewerRole === 'member' ? '我的额度' : '一起使用的人';
   $('#members-title').nextElementSibling.textContent = viewerRole === 'member' ? '查看自己的百分比上限与本期用量。' : '手动填写称呼和 Google 邮箱，按百分比为每个人分配额度。';
   $('#home-members-title').firstChild.textContent = viewerRole === 'member' ? '我的使用情况 ' : '一起使用的人 ';
-  $('#tutorial-identity').textContent = viewerRole === 'member' ? `当前登录：${viewerEmail}` : '管理员绑定邮箱后，成员即可自行登录。';
+  const ownMember = selfMember();
+  $('#tutorial-identity').textContent = ownMember ? `当前登录：${viewerEmail}` : '管理员绑定邮箱后，成员即可自行登录。';
+  $('#self-install-token').hidden = !ownMember;
+  $('#tutorial-member-link').hidden = !!ownMember;
   renderAvailability(); if(viewerRole === 'admin') renderMother(); renderMembers(); renderEvents();
   $('#quota-breakdown').replaceChildren(...data.pools.map(calibrationView));
   if (!policyLoaded || !$('#policy-form').dataset.dirty) loadPolicy();
@@ -352,6 +356,9 @@ function route(focus = true) {
     if (link.hash === `#${page}`) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
   });
   $('.account-menu').open = false;
+  if (page === 'tutorial' && selfMember()) {
+    if (!selfTokenRequest) loadSelfToken();
+  } else if (selfTokenRequest) resetSelfToken();
   if (page === 'settings') { if (!policyLoaded && data) loadPolicy(); if (tab) settingsTab(tab); }
   if (focus && data) { document.querySelector(`#${page} h1`).focus({preventScroll: true}); window.scrollTo(0, 0); }
 }
@@ -491,19 +498,59 @@ function installationPrompt(token = '【复制时会自动填入你的成员令�
 function clearPromptFallbacks() {
   for(const id of ['install-prompt-fallback','token-prompt-fallback']) {$('#'+id).value='';$('#'+id).hidden=true;}
 }
-async function copyInstallationPrompt(input, fallback) {
-  if(!/^agy_[a-f0-9]{64}$/.test(input.value.trim())) {
-    input.setCustomValidity('请先粘贴有效的成员令牌，或生成新令牌后再复制');
-    input.reportValidity();input.focus();return;
-  }
+function selfMember() {
+  return viewerEmail && data?.members.find(member => member.email === viewerEmail && member.enabled);
+}
+function setInstallationToken(token = '') {
+  const input = $('#installation-token');
+  input.value = token;
   input.setCustomValidity('');
-  const prompt=installationPrompt(input.value.trim());
+}
+function renderSelfToken(token) {
+  const input = $('#installation-token');
+  setInstallationToken(token ?? '');
+  clearPromptFallbacks();
+  input.readOnly = !!token;
+  $('#copy-self-token').hidden = !token;
+  $('#save-self-token').hidden = token !== null;
+  $('#retry-self-token').hidden = true;
+  $('#installation-token-status').textContent = token ? '在其他设备上登录后，也可以使用这个令牌。' : token === null ? '粘贴原有令牌并保存一次，即可在其他设备查看。' : '';
+}
+function resetSelfToken() {
+  selfTokenRequest = null;
+  renderSelfToken();
+}
+async function loadSelfToken() {
+  renderSelfToken();
+  $('#installation-token-status').textContent = '正在读取你的安装令牌…';
+  const request = selfTokenRequest = api('token', 'GET', undefined, 'member');
+  try {
+    const {token} = await request;
+    if (selfTokenRequest === request) renderSelfToken(token);
+  } catch (error) {
+    if (selfTokenRequest !== request) return;
+    $('#installation-token-status').textContent = error.message;
+    $('#retry-self-token').hidden = false;
+  }
+}
+function installationToken(input) {
+  const token = input.value.trim();
+  if (/^agy_[a-f0-9]{64}$/.test(token)) return token;
+  input.setCustomValidity('请先填写有效的成员令牌');
+  input.reportValidity(); input.focus();
+}
+async function copyInstallationPrompt(input, fallback) {
+  const token = installationToken(input);
+  if (!token) return;
+  const prompt=installationPrompt(token);
   try {await navigator.clipboard.writeText(prompt);toast('安装提示词已复制，发给自己的 AI 即可');}
   catch {fallback.value=prompt;fallback.hidden=false;fallback.focus();fallback.select();toast('无法自动复制，已选中完整提示词，请手动复制');}
 }
 function showToken(result) {
   clearPromptFallbacks();
-  $('#generated-token').value=result.token;$('#installation-token').value=result.token;$('#installation-token').setCustomValidity('');
+  $('#generated-token').value=result.token;
+  if (!selfMember()) setInstallationToken(result.token);
+  else if (selfMember().member_id === result.member_id && !$('#tutorial').hidden) renderSelfToken(result.token);
   renderInstallCommands();$('#token-dialog').showModal();
 }
 function numericForm(form,fields) {return Object.fromEntries(fields.map(k=>[k,Number(form.elements[k].value)]));}
@@ -655,9 +702,29 @@ document.querySelectorAll('[data-copy-command]').forEach(button=>{
     .then(()=>toast('命令已复制')).catch(()=>toast('无法自动复制，请选中命令手动复制'));
 });
 $('#token-tutorial').onclick=()=>$('#token-dialog').close();
+$('#retry-self-token').onclick = loadSelfToken;
+$('#copy-self-token').onclick = async () => {
+  const input = $('#installation-token');
+  try { await navigator.clipboard.writeText(input.value); toast('令牌已复制'); }
+  catch { input.focus(); input.select(); toast('已选中令牌，请手动复制'); }
+};
+$('#save-self-token').onclick = async event => {
+  const button = event.currentTarget, request = selfTokenRequest;
+  const original = installationToken($('#installation-token'));
+  if (!original) return;
+  button.disabled = true;
+  try {
+    const {token} = await api('token', 'POST', {token: original}, 'member');
+    if (selfTokenRequest === request) { renderSelfToken(token); toast('已保存原有令牌'); }
+  } catch (error) {
+    if (selfTokenRequest === request) $('#installation-token-status').textContent = error.message;
+  } finally { button.disabled = false; }
+};
 $('#self-install-token').onclick=async()=>{
   let result;
-  if(viewerRole!=='member'||!await confirmAction({title:'生成新的安装令牌？',description:'旧令牌将立即失效。请先等待进行中调用完成，并在所有使用你这份额度的电脑上用新令牌重新安装。',label:'生成新令牌',action:async()=>{result=await api('rotate-token','POST',{});}}))return;
+  if(!selfMember()||!await confirmAction({title:'重置安装令牌？',description:'旧令牌将立即失效。请先等待进行中调用完成，并在所有使用你这份额度的电脑上用新令牌重新安装。',label:'重置令牌',action:async()=>{result=await api('rotate-token','POST',{},'member');}}))return;
+  if (!selfMember() || $('#tutorial').hidden) return;
+  selfTokenRequest = Promise.resolve(result);
   showToken(result);
 };
 route(false);

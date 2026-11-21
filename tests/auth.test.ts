@@ -211,9 +211,52 @@ test('verified bound members log in without replacing mother credentials and rec
   assert.deepEqual(view.members.map((m:any)=>m.member_id),[m.member_id]);
   assert.deepEqual(view.events.map((e:any)=>e.member_id),[m.member_id]);
   assert.equal(view.mother.email,undefined);assert.equal(view.members[0].token_hash,undefined);assert.equal(view.members[0].google_id,undefined);
+  assert.equal(view.members[0].token_ciphertext,undefined);
   assert.equal((await route('/api/admin/overview',{cookie:sessionCookie})).status,403);
   for(const path of ['/api/admin/members','/api/admin/policy','/api/admin/mother/login'])assert.equal((await route(path,{body:{},cookie:sessionCookie})).status,403);
   assert.equal((await route('/api/member/overview')).status,401);
+});
+
+test('installation token follows the bound account across browser sessions and stays out of overviews',async()=>{
+  const adminCookie=cookie(await login());
+  const own=await addMember({email}),m=await addMember(),other=await addMember({email:'other@gmail.com'});
+  assert.equal((await route('/api/member/token')).status,401);
+  const adminView=await (await route('/api/admin/overview',{cookie:adminCookie})).text();
+  assert.ok(!adminView.includes('token_ciphertext')&&!adminView.includes(own.token)&&!adminView.includes(m.token));
+  assert.deepEqual(await (await route(`/api/member/token?member_id=${m.member_id}`,{cookie:adminCookie})).json(),{token:own.token});
+  asMember();
+  const first=cookie(await login()),second=cookie(await login());
+  assert.notEqual(first,second);
+  for(const sessionCookie of [first,second]) {
+    const response=await route(`/api/member/token?member_id=${other.member_id}`,{cookie:sessionCookie});
+    assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
+    assert.deepEqual(await response.json(),{token:m.token});
+  }
+  const stored=await db.prepare('SELECT token_hash,token_ciphertext FROM members WHERE member_id=?').bind(m.member_id).first();
+  assert.equal(stored?.token_hash,await hashToken(m.token));
+  assert.ok(stored?.token_ciphertext&&!JSON.stringify(stored).includes(m.token));
+  const adminRotation=await route(`/api/admin/members/${m.member_id}/rotate-token`,{cookie:adminCookie,body:{}});
+  assert.equal(adminRotation.status,200);
+  const rotated=await adminRotation.json() as {token:string};
+  assert.notEqual(rotated.token,m.token);
+  assert.deepEqual(await (await route('/api/member/token',{cookie:second})).json(),{token:rotated.token});
+});
+
+test('a hash-only installation token can be saved without invalidating existing devices',async()=>{
+  const m=await addMember(),other=await addMember({email:'other@gmail.com'});
+  await db.prepare('UPDATE members SET token_ciphertext=NULL WHERE member_id=?').bind(m.member_id).run();
+  asMember();const sessionCookie=cookie(await login());
+  const read=async()=> (await route('/api/member/token',{cookie:sessionCookie})).json();
+  const save=(token:string,headers={})=>route('/api/member/token',{cookie:sessionCookie,body:{token},headers});
+  assert.deepEqual(await read(),{token:null});
+  assert.equal((await save(other.token)).status,400);
+  assert.equal((await save(m.token,{Origin:'https://evil.example'})).status,403);
+  assert.deepEqual(await read(),{token:null});
+  const existingDevice=()=>route('/release',{body:{conversationId:'existing-device',fullyIdle:true},headers:{Authorization:`Bearer ${m.token}`}});
+  assert.equal((await existingDevice()).status,200);
+  for(let i=0;i<2;i++)assert.deepEqual(await (await save(m.token)).json(),{token:m.token});
+  assert.deepEqual(await read(),{token:m.token});
+  assert.equal((await existingDevice()).status,200);
 });
 
 test('member self-service rotates only their own token and requires same-origin writes',async()=>{
@@ -223,6 +266,7 @@ test('member self-service rotates only their own token and requires same-origin 
   const result=await route('/api/member/rotate-token',{body:{member_id:other.member_id},cookie:sessionCookie});assert.equal(result.status,200);
   const token=await result.json() as any;assert.equal(token.member_id,m.member_id);assert.notEqual(token.token,m.token);
   assert.equal((await db.prepare('SELECT token_hash FROM members WHERE member_id=?').bind(m.member_id).first<any>()).token_hash,await hashToken(token.token));
+  assert.deepEqual(await (await route('/api/member/token',{cookie:sessionCookie})).json(),{token:token.token});
   assert.deepEqual(await db.prepare('SELECT token_hash FROM members WHERE member_id=?').bind(other.member_id).first(),before);
   assert.equal((await route(`/api/admin/members/${other.member_id}/rotate-token`,{body:{},cookie:sessionCookie})).status,403);
 });
@@ -235,6 +279,7 @@ test('member Google subjects are pinned; unknown, paused, deleted and unverified
   asMember();const sessionCookie=cookie(await login());
   await db.prepare('UPDATE members SET enabled=0 WHERE member_id=?').bind(m.member_id).run();
   assert.equal((await login()).status,403);assert.equal((await route('/api/member/overview',{cookie:sessionCookie})).status,401);
+  assert.equal((await route('/api/member/token',{cookie:sessionCookie})).status,401);
   await db.prepare('UPDATE members SET enabled=1,deleted_at=1 WHERE member_id=?').bind(m.member_id).run();
   assert.equal((await login()).status,403);
 });

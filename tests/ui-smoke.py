@@ -173,7 +173,7 @@ with sync_playwright() as p:
     assert page.locator('#generated-token').input_value() == 'agy_'+'a'*64
     assert '--token ' not in page.locator('#install-command').inner_text()
     page.screenshot(path=str(out/'member-install-desktop.png'),full_page=True,animations='disabled',style='#toast { visibility: hidden !important; }')
-    page.locator('#token-dialog [data-close]').click()
+    page.locator('#token-dialog button[data-close]').click()
     expect(page.locator('#generated-token')).to_have_value('')
 
     page.locator('.main-nav a[href="#members"]').click()
@@ -202,7 +202,7 @@ with sync_playwright() as p:
     page.locator('#confirm-submit').click()
     expect(page.locator('#token-dialog')).to_be_visible()
     assert page.locator('#generated-token').input_value() == 'agy_'+'b'*64
-    page.locator('#token-dialog [data-close]').click()
+    page.locator('#token-dialog button[data-close]').click()
     page.locator('#member-list button[data-member="new-person"]').click()
     delete_requests=lambda: len([r for r in requests if r[0]=='DELETE'])
     before_delete=delete_requests()
@@ -245,7 +245,7 @@ with sync_playwright() as p:
     assert len(state['members'])==3
     page.locator('#upgrade-client').click()
     expect(page.locator('#upgrade-command')).to_contain_text('--upgrade')
-    page.locator('#upgrade-dialog [data-close]').click()
+    page.locator('#upgrade-dialog button[data-close]').click()
 
     page.locator('.main-nav a[href="#activity"]').click()
     expect(page.locator('#events')).to_contain_text('已记账')
