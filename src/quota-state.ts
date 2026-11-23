@@ -50,7 +50,14 @@ export function observeQuota(
   const old = sameSource ? previous : null;
   if (old && b.at <= old.observed_at) return null;
   const cycleOld = sameAccount ? previous : null;
-  const reset = !!cycleOld && (b.at >= cycleOld.reset_at || !!old && b.fraction >= 1 - EPSILON && old.last_fraction < 1 - EPSILON);
+  const scheduledReset = cycleOld !== null && b.at >= cycleOld.reset_at;
+  const fullRefill = old !== null && b.fraction >= 1 - EPSILON && old.last_fraction < 1 - EPSILON;
+  // A global weekly reset can already be partly spent by the next sync. Require
+  // the same bucket to show both a new seven-day window and a meaningful refill.
+  const weeklyStart = b.resetAt - WEEK;
+  const earlyWeeklyReset = old !== null && b.window === 'week' && b.resetAt > old.reset_at &&
+    weeklyStart > old.observed_at && weeklyStart <= b.at && b.fraction > old.last_fraction + UPSTREAM_STEP.week;
+  const reset = scheduledReset || fullRefill || earlyWeeklyReset;
   const delta = DELTA_TOLERANCE[b.window];
 
   let histUnits = old?.hist_units ?? 0;
@@ -80,9 +87,9 @@ export function observeQuota(
 
   if (previous && !sameSource && sameAccount) state.cycle_started_at = previous.cycle_started_at;
   if (reset) {
-    state.cycle_started_at = b.at >= cycleOld!.reset_at
-      ? Math.max(cycleOld!.reset_at, Math.min(b.at, b.resetAt - duration(b.window)))
-      : b.at;
+    state.cycle_started_at = scheduledReset
+      ? Math.max(cycleOld.reset_at, Math.min(b.at, b.resetAt - duration(b.window)))
+      : earlyWeeklyReset ? weeklyStart : b.at;
     state.initial_fraction = 1;
     state.initial_at = b.at;
   }

@@ -512,6 +512,51 @@ test('official 5h and weekly resets independently clear family and member percen
   } finally {globalThis.fetch=fetchBefore;Date.now=clockBefore;}
 });
 
+test('an early AGY weekly reset clears old usage even when the new window is already partly used',async()=>{
+  const at=Math.floor(Date.now()/1000),m=await member({gemini_wk_limit:.06}),mr=await row(m);
+  const p=await policy(),env=accountEnv(),fetchBefore=globalThis.fetch,clockBefore=Date.now;
+  const value=summary(.9,at*1000);
+  const weekly=value.groups[0].buckets[1];
+  weekly.remainingFraction=.4;
+  await db.prepare('UPDATE mother_account SET credentials=? WHERE id=1')
+    .bind(await seal(env,{access_token:'secret',refresh_token:'refresh',expires_at:at*1000+3600_000})).run();
+  globalThis.fetch=async(input:any)=>Response.json(String(input).endsWith(':loadCodeAssist')?{}:value);
+  const refreshAt=async(time:number)=>{
+    Date.now=()=>time*1000;
+    assert.equal((await refreshMother(env))!.status,'connected');
+  };
+
+  try {
+    await refreshAt(at);
+    await commit(db,mr,p,call(0),at+10);
+    await commit(db,mr,p,call(1),at+20);
+    await commit(db,mr,p,call(2,'claude-sonnet-5.5'),at+30);
+
+    weekly.remainingFraction=.5;
+    await refreshAt(at+60); // A balance increase alone does not reset the ledger.
+    assert.equal((await usage(db,'gemini',at+61,m.member_id)).week,.05);
+    assert.equal((await check(db,mr,p,call(3),at+61)).terminationBehavior,'terminate');
+
+    weekly.resetTime=new Date((at+90+WEEK)*1000).toISOString();
+    await refreshAt(at+120); // A timer change alone does not reset the ledger.
+    assert.equal((await usage(db,'gemini',at+121,m.member_id)).week,.05);
+
+    await commit(db,mr,p,call(4),at+160);
+    weekly.resetTime=new Date((at+150+WEEK)*1000).toISOString();
+    weekly.remainingFraction=.84;
+    await refreshAt(at+180);
+
+    assert.deepEqual(await usage(db,'gemini',at+181,m.member_id),{fiveHour:.3,week:.025});
+    assert.deepEqual(await usage(db,'gemini',at+181),{fiveHour:.3,week:.025});
+    assert.deepEqual(await usage(db,'third_party',at+181,m.member_id),{fiveHour:.3,week:.075});
+    assert.notEqual((await check(db,mr,p,call(5),at+181)).terminationBehavior,'terminate');
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM usage_logs WHERE status='committed'").first()).n,4);
+
+    await refreshAt(at+240);
+    assert.equal((await usage(db,'gemini',at+241,m.member_id)).week,.05);
+  } finally {globalThis.fetch=fetchBefore;Date.now=clockBefore;}
+});
+
 test('token rotation survives quota failure and authentication expiry immediately sets auth_required',async()=>{
   const env=accountEnv();
   await db.batch([db.prepare('DELETE FROM mother_account'),db.prepare('DELETE FROM real_quota_budgets')]);
