@@ -161,7 +161,9 @@ function memberRow(member, home = false) {
   info.append(node('div', 'avatar', [...member.name][0]), text); row.append(info);
   if (home && !member.enabled) row.append(node('div', 'member-paused-note', '已暂停新调用'));
   else for (const [key, label, prefix] of [['gemini', 'Gemini', 'gemini'], ['third_party', 'Claude / GPT', 'tp']]) {
-    const window = home ? 'fiveHour' : memberWindow, limit = member[`${prefix}_${window === 'fiveHour' ? '5h' : 'wk'}_limit`];
+    const window = home ? 'fiveHour' : memberWindow, share = member[`${prefix}_${window === 'fiveHour' ? '5h' : 'wk'}_limit`];
+    const scale = window === 'week' ? data.pools.find(pool => pool.pool === key)?.weeklyScale ?? 1 : 1;
+    const limit = share * scale;
     const usage = node('div', 'member-usage'); usage.append(node('span', '', label), node('strong', '', `${number(member.usage[key][window])}% / ${number(limit)}%`)); row.append(usage);
   }
   if (viewerRole === 'member') return row;
@@ -172,6 +174,11 @@ function emptyMembers() {
   const empty = node('div', 'empty'); empty.append(node('strong', '', '把第一份额度，留给家里的人。'), node('p', '', '添加成员后，就能分配百分比额度并获取安装令牌。')); return empty;
 }
 function renderMembers() {
+  $('#reset-weekly-usage').hidden = viewerRole !== 'admin' || memberWindow !== 'week';
+  const scaled = memberWindow === 'week' && data.pools.some(pool => (pool.weeklyScale ?? 1) < 1);
+  $('#member-window-caption').textContent = scaled
+    ? '已用 / 按重置余额折算后的上限，含进行中预留'
+    : '已用 / 个人百分比上限，含进行中预留';
   const focused = document.activeElement?.dataset.member, inHome = !!document.activeElement?.closest('#home-members');
   $('#member-count').textContent = data.members.length || '';
   $('#home-members').replaceChildren(...(data.members.length ? data.members.slice(0, 4).map(m => memberRow(m, true)) : [emptyMembers()]));
@@ -618,6 +625,16 @@ document.querySelectorAll('[data-member-window]').forEach(button => button.oncli
   document.querySelectorAll('[data-member-window]').forEach(other => { const selected = other === button; other.classList.toggle('selected', selected); other.setAttribute('aria-pressed', String(selected)); });
   if (data) renderMembers();
 });
+$('#reset-weekly-usage').onclick = async () => {
+  if (!await confirmAction({
+    title: '重置所有成员的周用量？',
+    description: 'Gemini 和 Claude / GPT 会分别按最新官方周余额重新计算成员上限。所有成员的已结算周用量将清零，进行中的预留仍计入额度，历史记录会保留。',
+    label: '重置周用量',
+    action: () => api('weekly-reset', 'POST')
+  })) return;
+  try { await refresh(false, true); toast('已按最新官方余额重置周用量'); }
+  catch (error) { toast(error.message); }
+};
 $('#event-search').oninput = () => { if (data) renderEvents(); };
 $('#event-status').onchange = () => { if (data) renderEvents(); };
 $('#rotate-member-token').onclick = async () => {

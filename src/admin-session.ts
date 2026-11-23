@@ -7,6 +7,15 @@ export function configuredEmail(env:Env) {return env.ADMIN_GOOGLE_EMAIL?.trim().
 export async function adminIdentity(env:Env) {
   return env.DB.prepare('SELECT email,google_id FROM admin_identity WHERE id=1').first<Identity>();
 }
+export function adminLoginEmail(env:Env) {
+  // A connected mother account was verified during authorization. Do not let a
+  // stale bootstrap email override it, or a mismatched record undo a newer pin.
+  return env.DB.prepare(`SELECT COALESCE(
+    CASE WHEN i.email IS NULL OR lower(m.email)=i.email THEN lower(m.email) END,
+    ?,i.email) AS email
+    FROM (SELECT 1 AS id) a LEFT JOIN admin_identity i ON i.id=a.id
+    LEFT JOIN mother_account m ON m.id=a.id`).bind(configuredEmail(env)).first<string>('email');
+}
 type CookieKind='admin'|'oauth';
 function cookieName(req:Request,kind:CookieKind) {
   return `${new URL(req.url).protocol==='https:'?'__Host-':''}agy_${kind}`;
@@ -28,7 +37,9 @@ export async function browserSession(req:Request,env:Env) {
   const session=await env.DB.prepare(`SELECT s.email,s.google_id FROM admin_sessions s JOIN admin_identity i
     ON i.id=1 AND i.email=s.email AND i.google_id=s.google_id WHERE s.token_hash=? AND s.expires_at>?`)
     .bind(await hashToken(token),Date.now()).first<Identity>();
-  if(session&&(!configuredEmail(env)||configuredEmail(env)===session.email))return {...session,role:'admin' as const};
+  const configured=configuredEmail(env);
+  if(session&&(!configured||configured===session.email||await adminLoginEmail(env)===session.email))
+    return {...session,role:'admin' as const};
   return env.DB.prepare(`SELECT s.email,s.google_id,s.member_id,'member' AS role FROM member_sessions s JOIN members m
     ON m.member_id=s.member_id AND m.email=s.email AND m.google_id=s.google_id
     WHERE s.token_hash=? AND s.expires_at>? AND m.enabled=1 AND m.deleted_at IS NULL`)
@@ -56,7 +67,7 @@ export async function createMemberSession(req:Request,env:Env,email:string,googl
 }
 export async function verifyGoogleAdmin(env:Env,email:string,googleId:string,allowReplacement:boolean) {
   const owner=await adminIdentity(env),configured=configuredEmail(env);
-  const expected=configured||owner?.email;
+  const expected=allowReplacement?configured:await adminLoginEmail(env);
   if(!allowReplacement&&!expected)throw new HttpError(503,'请先配置母账号管理员邮箱，或用管理员令牌连接一次母账号');
   if((configured||!allowReplacement)&&email!==expected)throw new HttpError(403,'此 Google 账号不是家庭管理员，请选择母账号');
   if(owner?.email===email&&owner.google_id&&owner.google_id!==googleId)throw new HttpError(403,'Google 账号身份与管理员记录不匹配');

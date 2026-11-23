@@ -4,7 +4,7 @@ import {
   FIVE_HOURS, WEEK, MOTHER_GRACE_SECONDS,
   upperRateSql, activeUsageSql, budgetStatement, budgetView, type BudgetRow
 } from './quota-state';
-import {cyclesReadySql,cycleUsageSql,ensureUsageTotals} from './usage-totals';
+import {cyclesReadySql,cycleUsageSql,ensureUsageTotals,weeklyScaleSql} from './usage-totals';
 
 export {FIVE_HOURS, WEEK, MOTHER_GRACE_SECONDS};
 export {overviewUsage} from './usage-statistics';
@@ -144,6 +144,7 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
   const {pool, weight: ruleWeight} = resolveRule(i.modelName, p);
   await ensureUsageTotals(db,pool,now);
   const ml = limits(member, pool), fl = limits(p, pool, p.buffer_percent);
+  const weekScale = weeklyScaleSql(pool,now);
   const k5 = upperRateSql(pool, 'fiveHour'), kw = upperRateSql(pool, 'week');
   const real5Expr = windowAvailSql(pool, 'fiveHour', now, 'rates.k5', p.buffer_percent);
   const realwExpr = windowAvailSql(pool, 'week', now, 'rates.kw', p.buffer_percent);
@@ -151,7 +152,7 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
   // Single serialized SQL write: checks mother account grace health, context-aware P95 reservation,
   // member share %, family cap %, and real mother official % ceiling without last-drop overdrafts.
   const reservation = db.prepare(`WITH
-    rates AS (SELECT ${k5} AS k5, ${kw} AS kw),
+    rates AS (SELECT ${k5} AS k5, ${kw} AS kw, ${weekScale} AS weekScale),
     ctx AS (
       SELECT MAX(?, COALESCE((
         SELECT COALESCE(input_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(output_tokens,0)
@@ -187,11 +188,11 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
     SELECT ?,?,?,req.u,?,?,'reserved',?,?
     FROM totals, rates, req, mother_gate, real_caps
     WHERE mother_gate.ok = 1 AND ${cyclesReadySql(pool,now)}
-      AND ? > 0 AND ? > 0 AND ? > 0 AND ? > 0
+      AND ? > 0 AND ? > 0 AND ? > 0 AND ? > 0 AND rates.weekScale > 0
       AND (totals.mu5 + req.u) * rates.k5 * 100.0 <= ? + 1e-6
-      AND (totals.muw + req.u) * rates.kw * 100.0 <= ? + 1e-6
+      AND (totals.muw + req.u) * rates.kw * 100.0 <= ? * rates.weekScale + 1e-6
       AND (totals.fu5 + req.u) * rates.k5 * 100.0 <= ? + 1e-6
-      AND (totals.fuw + req.u) * rates.kw * 100.0 <= ? + 1e-6
+      AND (totals.fuw + req.u) * rates.kw * 100.0 <= ? * rates.weekScale + 1e-6
       AND real_caps.avail5 >= req.u * rates.k5 * 100.0 - 1e-6
       AND real_caps.availw >= req.u * rates.kw * 100.0 - 1e-6
     ON CONFLICT(member_id,conversation_id,invocation_num) DO UPDATE SET
@@ -209,7 +210,7 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
       now
     );
 
-  const motherStmt = db.prepare(`SELECT status, checked_at,${cyclesReadySql(pool,now)} AS totals_ready FROM mother_account WHERE id = 1`);
+  const motherStmt = db.prepare(`SELECT status, checked_at,${cyclesReadySql(pool,now)} AS totals_ready,${weekScale} AS week_scale FROM mother_account WHERE id = 1`);
   const latestCtxStmt = db.prepare(`SELECT COALESCE(input_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(output_tokens,0) AS tokens
     FROM usage_logs WHERE member_id=? AND conversation_id=? AND status='committed' ORDER BY id DESC LIMIT 1`)
     .bind(member.member_id, i.conversationId);
@@ -224,7 +225,7 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
 
   const quota = budgetView(budgets.results as unknown as BudgetRow[], p, pool, now);
   const row = identity.results[0] as unknown as UsageRow | undefined;
-  const motherRow = motherRes.results[0] as unknown as {status: string; checked_at: number | null;totals_ready:number} | undefined;
+  const motherRow = motherRes.results[0] as unknown as {status: string; checked_at: number | null;totals_ready:number;week_scale:number} | undefined;
   if(motherRow&&!motherRow.totals_ready)throw new HttpError(503,'额度账期正在切换，请稍后重试');
   const dbCtx = (ctxRes.results[0] as unknown as {tokens?: number} | undefined)?.tokens ?? 0;
 
@@ -238,6 +239,8 @@ export async function check(db: D1Database, member: Member, p: Policy, i: Invoca
     week: roundPoints(effectiveUnits * quota.week.upperPercentPerUnit)
   };
   if(admitted&&i.invocationNum%10_000!==0)return {quota,injectSteps:[]};
+  ml.week=roundPoints(ml.week*(motherRow?.week_scale??1));
+  fl.week=roundPoints(fl.week*(motherRow?.week_scale??1));
   // Only balance notifications and denied calls need the display totals.
   const [memberUsage,familyUsage]=await db.batch([
     usageStatement(db,pool,now,member.member_id),usageStatement(db,pool,now)

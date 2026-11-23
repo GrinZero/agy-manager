@@ -1,6 +1,6 @@
 import {hashToken,HttpError,json,newToken,readBody,string} from './security';
 import type {Env,Policy} from './types';
-import {adminIdentity,configuredEmail,cookieValue,createBrowserSession,createMemberSession,setCookie,verifyGoogleAdmin} from './admin-session';
+import {adminIdentity,adminLoginEmail,configuredEmail,cookieValue,createBrowserSession,createMemberSession,setCookie,verifyGoogleAdmin} from './admin-session';
 import {FRESH_SECONDS,MOTHER_GRACE_SECONDS,observationWrites,type QuotaObservation} from './quota-state';
 import {ensureUsageTotals} from './usage-totals';
 
@@ -216,7 +216,7 @@ export async function finishOAuth(env:Env,callback:string,context:OAuthContext={
   const info=await remote('https://www.googleapis.com/oauth2/v2/userinfo',{headers:{Authorization:`Bearer ${accessToken}`}});
   if(typeof info.email!=='string'||info.verified_email!==true||typeof info.id!=='string'||!info.id||info.id.length>256)throw new HttpError(400,'无法确认 Google 账号身份');
   const email=info.email.trim().toLowerCase();
-  const expectedEmail=configuredEmail(env)||(await adminIdentity(env))?.email;
+  const expectedEmail=await adminLoginEmail(env);
   if(context.purpose==='login'&&email!==expectedEmail) {
     if(!context.request)throw new HttpError(400,'请在发起登录的浏览器完成授权');
     const response=json({role:'member'});
@@ -246,7 +246,7 @@ export async function finishOAuth(env:Env,callback:string,context:OAuthContext={
     env.DB.prepare('UPDATE policy SET real_quota_guard=1,real_quota_floor=0 WHERE id=1 AND EXISTS (SELECT 1 FROM admin_identity WHERE id=1 AND email=? AND google_id=?)').bind(email,info.id)
   ]);
   if(!saved[1].meta.changes)throw new HttpError(409,'管理员身份已变更，请重新登录');
-  const response=json({account:await refreshMother(env)});
+  const response=json({role:'admin',account:await refreshMother(env)});
   if(context.request)response.headers.append('Set-Cookie',await createBrowserSession(context.request,env,{email,google_id:info.id}));
   return response;
 }

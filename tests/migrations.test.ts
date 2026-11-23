@@ -20,6 +20,7 @@ test('cumulative migration preserves existing ledger and credentials and initial
     const before=await Promise.all(tables.map(async table=>(await db.prepare(`SELECT * FROM ${table}`).all()).results));
     await applyMigration(db,migration);
     assert.deepEqual(await Promise.all(tables.map(async table=>(await db.prepare(`SELECT * FROM ${table}`).all()).results)),before);
+    for(const name of (await readdir('migrations')).filter(n=>n.endsWith('.sql')&&n>migration).sort())await applyMigration(db,name);
     assert.deepEqual((await overviewUsage(db,'gemini',2000000000)).family,await usage(db,'gemini',2000000000));
     await db.prepare("UPDATE members SET enabled=0,deleted_at=2000000001 WHERE member_id='m'").run();
     assert.equal((await overviewUsage(db,'gemini',2000000001)).family.fiveHour,.2);

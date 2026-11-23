@@ -1,4 +1,4 @@
-import {adminIdentity,browserSession,configuredEmail,cookieValue,requireSameOrigin,setCookie} from './admin-session';
+import {adminLoginEmail,browserSession,cookieValue,requireSameOrigin,setCookie} from './admin-session';
 import {finishOAuth,startOAuth} from './mother-account';
 import {hashToken,HttpError,json,newToken,readBody,string} from './security';
 import type {Env} from './types';
@@ -15,7 +15,7 @@ export async function auth(req:Request,env:Env,path:string):Promise<Response> {
 async function handleAuth(req:Request,env:Env,path:string):Promise<Response> {
   if(path==='/api/auth/status'&&req.method==='GET') {
     const session=await browserSession(req,env);
-    return json({authenticated:!!session,google_login_available:!!(configuredEmail(env)||await adminIdentity(env)),
+    return json({authenticated:!!session,google_login_available:!!(await adminLoginEmail(env)),
       ...(session?{role:session.role,email:session.email}: {})});
   }
   if(path==='/api/auth/logout'&&req.method==='POST') {
@@ -32,7 +32,7 @@ async function handleAuth(req:Request,env:Env,path:string):Promise<Response> {
   }
   if(path==='/api/auth/google/start'&&req.method==='POST') {
     requireSameOrigin(req);
-    if(!configuredEmail(env)&&!await adminIdentity(env))throw new HttpError(503,'请先配置母账号管理员邮箱，或用管理员令牌连接一次母账号');
+    if(!await adminLoginEmail(env))throw new HttpError(503,'请先配置母账号管理员邮箱，或用管理员令牌连接一次母账号');
     const nonce=newToken();
     const response=await startOAuth(env,{purpose:'login',browserHash:await hashToken(nonce),origin:new URL(req.url).origin});
     response.headers.append('Set-Cookie',setCookie(req,'oauth',nonce,600));
