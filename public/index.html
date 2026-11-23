@@ -22,7 +22,8 @@
     </section>
     <section id="members" class="page" aria-labelledby="members-title" hidden>
       <div class="page-heading"><div><h1 id="members-title" tabindex="-1">一起使用的人</h1><p>手动填写称呼和 Google 邮箱，按百分比为每个人分配额度。</p></div><button class="outline" data-add-member data-admin-only>＋ 添加成员</button></div>
-      <div class="member-window-control" aria-label="查看成员用量窗口"><button class="selected" data-member-window="fiveHour" aria-pressed="true">5 小时</button><button data-member-window="week" aria-pressed="false">每周</button><span>已用 / 个人百分比上限，含进行中预留</span></div>
+      <div class="member-window-control" aria-label="查看成员用量窗口"><button class="selected" data-member-window="fiveHour" aria-pressed="true">5 小时</button><button data-member-window="week" aria-pressed="false">每周</button><span id="member-window-caption">已用 / 个人百分比上限，含进行中预留</span></div>
+      <button id="reset-weekly-usage" class="outline" data-admin-only hidden>手动重置周用量</button>
       <div id="member-list" class="member-list"></div><div class="page-footnote"><span>个人百分比上限不提前预扣家庭池额度。</span><button id="upgrade-client" class="text-button">更新本地守门员 ↗</button></div>
     </section>
     <section id="activity" class="page" aria-labelledby="activity-title" hidden>

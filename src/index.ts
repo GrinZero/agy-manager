@@ -4,6 +4,7 @@ import type {Env, Limits, Member, Policy} from './types';
 import {motherAccount, motherAdmin, refreshMother,refreshMotherForCall,seal,unseal} from './mother-account';
 import {authenticateAdmin, browserSession, requireSameOrigin} from './admin-session';
 import {auth} from './auth';
+import {resetWeeklyUsage,weeklyScaleSql} from './usage-totals';
 
 const limitFields = ['gemini_5h_limit', 'gemini_wk_limit', 'tp_5h_limit', 'tp_wk_limit'] as const;
 const defaultLimits: Limits = {gemini_5h_limit: 25, gemini_wk_limit: 25, tp_5h_limit: 25, tp_wk_limit: 25};
@@ -25,13 +26,19 @@ async function overview(db: D1Database, now: number, memberId?: string) {
   ]);
   const poolNames = ['gemini', 'third_party'] as const;
   const totals = Object.fromEntries(await Promise.all(poolNames.map(async pool => [pool, await overviewUsage(db, pool, now)] as const)));
-  const pools = await Promise.all(poolNames.map(async pool => ({
-    pool,
-    usage: totals[pool].family,
-    limits: limits(p, pool, p.buffer_percent),
-    totalLimits: limits(p, pool),
-    realBudget: await reconciledBudget(db, p, pool, now)
-  })));
+  const pools = await Promise.all(poolNames.map(async pool => {
+    const [realBudget, scale] = await Promise.all([
+      reconciledBudget(db, p, pool, now),
+      db.prepare(`SELECT ${weeklyScaleSql(pool,now)} AS scale`).first<number>('scale')
+    ]);
+    const weeklyScale = scale ?? 1;
+    const effective = (buffer = 0) => {
+      const caps = limits(p, pool, buffer);
+      return {...caps, week: roundPoints(caps.week * weeklyScale)};
+    };
+    return {pool, usage: totals[pool].family, limits: effective(p.buffer_percent),
+      totalLimits: effective(), realBudget, weeklyScale};
+  }));
   const rateByPool = Object.fromEntries(pools.map(item => [item.pool, item.realBudget]));
   const enrichedEvents = (events.results as Record<string, any>[]).map(e => {
     const rb = rateByPool[e.pool_group];
@@ -123,6 +130,11 @@ async function admin(req: Request, env: Env, path: string): Promise<Response> {
   await authenticateAdmin(req, env);
   const now = Math.floor(Date.now() / 1000);
   if (path === '/api/admin/overview' && req.method === 'GET') return json(await overview(env.DB, now));
+  if (path === '/api/admin/weekly-reset' && req.method === 'POST') {
+    await refreshMother(env);
+    await resetWeeklyUsage(env.DB, Math.floor(Date.now() / 1000));
+    return json({ok: true});
+  }
   if (path.startsWith('/api/admin/mother')) return motherAdmin(req, env, path);
   if (path === '/api/admin/members' && req.method === 'POST') {
     const b = await readBody(req), l = readLimits(b, defaultLimits), name = string(b.name, 'name', 60);

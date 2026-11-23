@@ -103,17 +103,29 @@ test('cookie-authenticated writes require the same origin; bearer recovery and m
   assert.equal((await route('/api/admin/overview',{headers:{Authorization:`Bearer ${member.token}`}}, {...env(),ADMIN_TOKEN:adminToken})).status,401);
   assert.equal((await route('/api/admin/overview',{headers:{Authorization:`Bearer ${adminToken}`}}, {...env(),ADMIN_TOKEN:adminToken})).status,200);
 });
-test('logout revokes its session and pending OAuth; expiration and configured owner changes invalidate cookies',async()=>{
+test('logout revokes its session and pending OAuth; expiration invalidates cookies',async()=>{
   const sessionCookie=cookie(await login()),pending=await start();
   assert.equal((await route('/api/auth/logout',{body:{},cookie:sessionCookie,headers:{Origin:'https://evil.example'}})).status,403);
   assert.equal((await route('/api/auth/logout',{body:{},cookie:sessionCookie+'; '+pending.nonce})).status,200);
   assert.equal((await route('/api/admin/overview',{cookie:sessionCookie})).status,401);
   assert.equal((await route('/api/auth/google/finish',{body:{callback_url:pending.callback},cookie:pending.nonce})).status,400);
   const fresh=cookie(await login());
-  assert.equal((await route('/api/admin/overview',{cookie:fresh},{...env(),ADMIN_GOOGLE_EMAIL:'new-owner@example.com'})).status,401);
   await db.prepare('UPDATE admin_sessions SET expires_at=0').run();
   assert.equal((await route('/api/admin/overview',{cookie:fresh})).status,401);
 });
+test('the verified connected mother keeps admin access despite a stale configured email and a member entry',async()=>{
+  const first=cookie(await login());
+  await addMember({email});
+  const stale={...env(),ADMIN_GOOGLE_EMAIL:'stale@example.com'};
+  assert.equal((await route('/api/admin/overview',{cookie:first},stale)).status,200);
+  const connected=await login(stale);
+  assert.equal(connected.status,200);
+  assert.equal((await connected.clone().json() as any).role,'admin');
+  assert.equal((await route('/api/admin/overview',{cookie:cookie(connected)},stale)).status,200);
+  googleUser={email,id:'wrong-google-id',verified_email:true};
+  assert.equal((await login(stale)).status,403);
+});
+
 test('disconnect preserves the pinned identity so the mother can reconnect without a token',async()=>{
   const sessionCookie=cookie(await login()),bindings={...env(),ADMIN_GOOGLE_EMAIL:undefined};
   assert.equal((await route('/api/admin/mother',{method:'DELETE',cookie:sessionCookie,headers:{Origin:origin}},bindings)).status,200);

@@ -27,6 +27,7 @@
 | `PATCH /api/admin/policy` | 管理员 Cookie 或 Bearer | 家庭百分比上限、安全缓冲、模型相对权重、自动校准 |
 | `POST /api/admin/mother/login` | 管理员 Cookie 或 Bearer | 创建一次性 Google 授权会话 |
 | `POST /api/admin/mother/callback` | 管理员 Cookie 或 Bearer | 完成母账号授权并查询额度 |
+| `POST /api/admin/weekly-reset` | 管理员 Cookie 或 Bearer | 用最新官方周余额重置两个模型池的已结算周用量，成功返回 `{"ok":true}` |
 | `POST /api/admin/mother/refresh` | 管理员 Cookie 或 Bearer | 立即查询真实额度并对账 |
 | `DELETE /api/admin/mother` | 管理员 Cookie 或 Bearer | 删除云端母账号凭据 |
 

@@ -42,7 +42,7 @@ npm run deploy
 
 默认沿用已验证可查额度的桌面 OAuth 客户端。若改为自己的 Web OAuth client，必须先验证该客户端有额度接口访问资格；新注册客户端加上 scope 并不保证能查额度。仅对已验证可用的 Web client，使用 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 覆盖身份，将 `GOOGLE_REDIRECT_URI` 设置为 `https://你的后台域名/api/auth/google/callback`，并在 Google Cloud Console 登记完全相同的 Authorized redirect URI。桌面 client 不能直接改用公网回调，仍需手动粘贴。
 
-后台会话仅保存随机令牌的哈希，Cookie 设置 HttpOnly、SameSite=Lax，HTTPS 下启用 Secure 与 `__Host-` 前缀；通过 Cookie 进行管理写操作时校验同源 Origin。母账号断开连接后保留管理员身份，仍可通过 Google 登录恢复连接。更换母账号会使旧账号会话失效；若配置了 `ADMIN_GOOGLE_EMAIL`，需先更新该配置才能更换。
+后台会话仅保存随机令牌的哈希，Cookie 设置 HttpOnly、SameSite=Lax，HTTPS 下启用 Secure 与 `__Host-` 前缀；通过 Cookie 进行管理写操作时校验同源 Origin。母账号断开连接后保留管理员身份，仍可通过 Google 登录恢复连接。日常登录优先识别当前已验证并连接的母账号。`ADMIN_GOOGLE_EMAIL` 用于首次登录和授权更换母账号。更换时先更新该配置，再从管理页连接新母账号。更换完成后旧账号会话失效。
 
 母账号 access/refresh token 使用 `ACCOUNT_ENCRYPTION_KEY` 加密存入 D1，不返回浏览器或成员。密钥生成脚本只通过 stdin 配置 Cloudflare Secret，重复执行保留原密钥；请备份 `.production.vars`。本地 `setup:local` 自动创建独立开发密钥。
 

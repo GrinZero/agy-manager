@@ -58,7 +58,7 @@ beforeEach(async()=>{
     db.prepare('DELETE FROM mother_account'),db.prepare('DELETE FROM oauth_sessions'),
     db.prepare('DELETE FROM real_quota_budgets'),db.prepare('DELETE FROM admin_identity'),
     db.prepare('DELETE FROM admin_sessions'),db.prepare('DELETE FROM quota_calibration'),
-    db.prepare('DELETE FROM quota_samples')
+    db.prepare('DELETE FROM quota_samples'),db.prepare('DELETE FROM manual_week_resets')
   ]);
   await seedMother();
 });
@@ -555,6 +555,37 @@ test('an early AGY weekly reset clears old usage even when the new window is alr
     await refreshAt(at+240);
     assert.equal((await usage(db,'gemini',at+241,m.member_id)).week,.05);
   } finally {globalThis.fetch=fetchBefore;Date.now=clockBefore;}
+});
+
+test('manual weekly reset uses both official pool balances and keeps the history and active holds',async()=>{
+  const at=Math.floor(Date.now()/1000),m=await member({gemini_wk_limit:50}),small=await member({gemini_wk_limit:.04});
+  const mr=await row(m),p=await policy();
+  await seedMother(at);
+  await db.batch([
+    db.prepare('UPDATE mother_account SET attempted_at=?').bind(at*1000),
+    db.prepare("UPDATE real_quota_budgets SET remaining_fraction=.4 WHERE pool_group='gemini' AND window_name='week'"),
+    db.prepare("UPDATE real_quota_budgets SET remaining_fraction=.8 WHERE pool_group='third_party' AND window_name='week'")
+  ]);
+  await commit(db,mr,p,call(0),at-10);
+  await commit(db,mr,p,call(1,'claude-sonnet-5.5'),at-10);
+  await check(db,mr,p,call(2),at-5);
+  assert.equal((await request('/api/admin/weekly-reset',m.token,{})).status,401);
+  assert.equal((await request('/api/admin/weekly-reset',adminToken,{})).status,200);
+  assert.equal((await request('/api/admin/weekly-reset',adminToken,{})).status,409);
+  const view=(await request('/api/admin/overview')).body;
+  const memberView=view.members.find((entry:any)=>entry.member_id===m.member_id);
+  assert.deepEqual(memberView.usage.gemini,{fiveHour:.2,week:.025});
+  assert.deepEqual(memberView.usage.third_party,{fiveHour:.3,week:0});
+  assert.deepEqual(view.pools.map((pool:any)=>pool.weeklyScale),[.4,.8]);
+  assert.deepEqual(view.pools.map((pool:any)=>pool.totalLimits.week),[40,80]);
+  assert.equal(memberView.gemini_wk_limit,50);
+  assert.equal(view.events.filter((event:any)=>event.status==='committed').length,2);
+  assert.equal((await check(db,await row(small),p,call(0),at)).terminationBehavior,'terminate');
+
+  await commit(db,mr,p,call(2),at+1);
+  assert.deepEqual(await usage(db,'gemini',at+2,m.member_id),{fiveHour:.2,week:.025});
+  await commit(db,mr,p,call(3),at+WEEK);
+  assert.equal((await usage(db,'gemini',at+WEEK,m.member_id)).week,.025);
 });
 
 test('token rotation survives quota failure and authentication expiry immediately sets auth_required',async()=>{
